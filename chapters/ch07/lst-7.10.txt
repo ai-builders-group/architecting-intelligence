@@ -1,0 +1,125 @@
+LOCAL CASE: one nonreentrant owner thread; pinned, read-only metrics fixture.
+Types: ObservationEnvelope(workspace, observation ID/revision, time/window,
+       source, confidence in [0,1], privacy, permissions, transformations,
+       metric points with finite values)
+       ComponentProposal(workspace, proposal ID, observation ID/revision,
+       base application revision, generated_at, discriminated props)
+       UIEvent(event ID, actor/session/workspace, issued render, observation,
+       displayed revision, typed control payload, occurred_at)
+       EffectReceipt(receipt/command/event/attempt IDs, idempotency key,
+       verification class/time, bounded result or none)
+REGISTRY = {MetricCard -> article, MetricTable -> table,
+            MetricTrend -> figure + one load_comparison button}
+Only these names and their declared props/events/permissions are admitted.
+
+1  admit_candidate(raw_bytes, admission_id):
+     held = app.consume_prior_one_use_admission(admission_id)
+     REQUIRE bytes <= 4096 and SHA256(raw_bytes) == held.expected_digest
+     proposal = parse_json_rejecting_duplicate_keys_unknown_fields_and_tags(
+         raw_bytes, discriminated_props=REGISTRY)
+     REQUIRE proposal's workspace, observation ID/revision, and base
+             application revision match held scope
+     RETURN app.issue_candidate_retaining_exact_bytes_identity_and_fingerprint(
+         proposal, raw_bytes)           # self-hash or lookalike is not admission
+
+2  render_proposal(candidate):
+     REQUIRE app.issued_exact_candidate(candidate)
+     observation = app.held_source_ObservationEnvelope(candidate.observation_id)
+     REQUIRE proposal/observation identities and revisions agree
+     REQUIRE held observation's confidence is present, finite, and in [0,1]
+     REQUIRE observation AND current actor grant registry read permission
+     REQUIRE each proposed metric exists in observation
+     title = text_policy_seam(proposal.props.title)
+             # local policy rejects markup/control text; production policy
+             # remains Chapter 13's, not a general sanitizer proved here
+     projected_points = immutable selected metric points/values from the
+            SAME held observation (current point for card; selected points
+            for table/trend); derive visual body from projected_points
+     plan = native article/table/figure intent from trusted registry,
+            projected_points, observation.confidence, sanitized title,
+            and typed button only
+            for MetricTrend; no model callback, raw HTML, or arbitrary URL
+     plan.static_fallback = escaped, noninteractive JSON projection from the
+            SAME projected_points and observation.confidence: title/body,
+            exact metric point IDs/times/values, component/native element,
+            workspace/render/proposal IDs, candidate digest, proposal time,
+            base revision, renderer version, metric IDs, observation ID/
+            revision/source/time/window/confidence/privacy/permissions/
+            transformations, and control label/event/permissions/approval
+            requirement; mark provisional, never application truth
+     RETURN app.issue_RenderPlan(plan)  # rejection yields no plan or fallback
+
+3  admit_event(event: UIEvent):
+     render = app.lookup_issued_RenderPlan(event.render_id)
+     current = app.held_actor_session_workspace_state_policy_and_permissions()
+     REQUIRE event's actor/session/workspace/render/proposal/observation IDs,
+             revisions, metric, and one declared control match render/current
+     REQUIRE event and resource permissions independently admit this action
+     approval = app.lookup_held_approval(event.event_id)
+     REQUIRE authorized approver, approved decision, and exact binding to
+             event + actor/session/workspace/render + observation/revisions +
+             canonical typed payload digest + current policy version
+     REQUIRE decision follows event and is current within five minutes
+     IF same event AND same complete held fingerprint was admitted: RETURN
+        the same held command; conflicting replay or changed inputs REJECT
+     RETURN app.issue_bounded_read_only_command(event, approval, current)
+            # event occurrence alone grants no command or effect authority
+
+4  dispatch_attempt(command_id):
+     command = app.lookup_issued_command(command_id)
+     attempt = app.issue_fresh_attempt_BEFORE_local_fixture_read(command)
+     response = pinned_local_comparison_lookup(command, attempt)
+     IF pinned key is provably absent: RETURN app.issue_canonical_receipt(
+          attempt, verified_rejection_or_failure, fixture_key_absent)
+     IF read is interrupted/uncertain: RETURN app.issue_canonical_receipt(
+          attempt, indeterminate, result=none)
+     RETURN attempt, response          # no production endpoint or write
+
+   verify_local_result(command_id, attempt, response):
+     REQUIRE app.issued_command_and_attempt(command_id, attempt)
+     IF this attempt has the same response fingerprint: RETURN its held receipt
+     IF this attempt has conflicting evidence: replace its canonical state
+          with one indeterminate conflict; prior success cannot reconcile
+     IF response matches command/workspace/attempt,
+        metric/window, pinned fixture digest, and exact fixture points:
+          receipt = verified_success(bound_result=response.points)
+     ELSE receipt = indeterminate(result=none)
+          # wrong attempt or uncertain response is not failure,
+          # non-execution, rollback, or success
+     RETURN app.issue_one_canonical_EffectReceipt(attempt, receipt)
+
+5  decide_reconciliation(command_id, receipt_id, store_observation_id?):
+     command = app.lookup_issued_command_by_ID(command_id)
+     receipt = app.lookup_issued_receipt_by_ID(receipt_id)
+     REQUIRE their workspace/event/idempotency/attempt bindings agree
+     REQUIRE receipt is the CURRENT canonical state for this attempt
+     IF current.revision != command.expected_revision:
+          IF store_observation_id exists: REJECT stale observation
+          ELSE RETURN app.issue_decision(retained_stale)
+     IF receipt is not verified_success AND store_observation_id exists:
+          REJECT unsupported observation
+     IF receipt is verified_rejection_or_failure:
+          RETURN app.issue_decision(retained_failure)
+     IF receipt is indeterminate:
+          RETURN app.issue_decision(retained_indeterminate)
+     IF receipt is verified_success AND no store_observation_id:
+          RETURN app.issue_decision(retained_awaiting_observation)
+     REQUIRE verified result is bounded to command.metric_id
+     observed = app.lookup_SEPARATELY_issued_store_observation_by_ID(
+          store_observation_id)  # unissued/cross-command ID REJECTS; no ID waited above
+     REQUIRE observed matches workspace/command/attempt/metric/window,
+             was issued after receipt, has revision=current.revision+1,
+             and has the verified points; caller-supplied lookalikes REJECT
+     RETURN app.issue_decision(committed, observed)
+
+   apply_reconciliation(decision):
+     REQUIRE app.issued_exact_decision(decision) and re-evaluation against
+             current held state/evidence yields the same disposition
+     IF committed: require current revision == command.expected revision;
+        take points/revision from observed, NEVER receipt
+     ELSE retain state unchanged with a bounded disposition delta
+     RETURN state plus delta naming receipt and, if committed, observation
+            # local illustration; persistent stores must CAS on expected
+            # revision with exactly one affected record, then re-evaluate
+            # before retry; effect truth and ambiguous recovery remain
+            # production responsibilities

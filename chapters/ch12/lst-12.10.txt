@@ -1,0 +1,1565 @@
+# chapters/ch12/lst-12.10.txt
+from __future__ import annotations
+
+import hashlib
+import re
+from datetime import date
+from typing import Literal, cast
+
+import pytest
+from implementations.evaluation_subject import (
+    ALL_RUNTIME_SURFACES,
+    SCHEMA_VERSION,
+    SHA256_PATTERN,
+    AttributionIdentityGate,
+    AttributionIdentityVerdict,
+    ComparisonPlan,
+    EvaluationSubject,
+    EvaluatorContract,
+    IdentityEvidenceReceipt,
+    KnownIdentity,
+    NotApplicable,
+    PopulationIdentity,
+    RunBoundBackendEvidence,
+    RunObservationReceipt,
+    RuntimeConfiguration,
+    UnknownIdentity,
+    canonical_sha256,
+    compare_subjects,
+)
+from pydantic import ValidationError
+
+
+def digest(seed: str = "a") -> str:
+    if len(seed) == 1 and seed in "0123456789abcdef":
+        value = seed * 64
+    else:
+        value = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    return f"sha256:{value}"
+
+
+def known(identifier: str, revision: str) -> KnownIdentity:
+    return KnownIdentity(
+        identifier=identifier,
+        revision=revision,
+        digest=digest(),
+    )
+
+
+def requested_route(revision: str) -> KnownIdentity:
+    return KnownIdentity(
+        identifier="requested-route",
+        revision=revision,
+        identity_basis="operator_configured_exact_value",
+    )
+
+
+def provider_checkpoint(
+    revision: str,
+    *,
+    verified_on: date = date(2026, 7, 1),
+    expires_on: date | None = date(2027, 7, 1),
+) -> KnownIdentity:
+    return KnownIdentity(
+        identifier="hosted-backend",
+        revision=revision,
+        identity_basis="provider_observed_revision",
+        identity_evidence=IdentityEvidenceReceipt(
+            claimed_identifier="hosted-backend",
+            claimed_revision=revision,
+            verifier_boundary="identity-registry",
+            method="registered_immutable_release",
+            evidence_locator="registry://hosted-backend",
+            evidence_digest=digest("b"),
+            verified_on=verified_on,
+            expires_on=expires_on,
+        ),
+    )
+
+
+def run_bound_evidence(
+    suffix: str,
+    backend: KnownIdentity,
+    *,
+    observed_on: date = date(2026, 7, 20),
+) -> RunBoundBackendEvidence:
+    return RunBoundBackendEvidence(
+        run_id=f"run-{suffix}",
+        request_id=f"request-{suffix}",
+        claimed_backend_identifier=backend.identifier,
+        claimed_backend_revision=backend.revision,
+        attestation_method="gateway_attested",
+        evidence_locator=f"gateway://receipts/run-{suffix}",
+        evidence_digest=digest(f"run-bound-{suffix}"),
+        observed_on=observed_on,
+    )
+
+
+def runtime(
+    requested_route_value: KnownIdentity,
+    backend_identity: KnownIdentity | UnknownIdentity | None = None,
+) -> RuntimeConfiguration:
+    if backend_identity is None:
+        backend_identity = provider_checkpoint("backend-v1")
+    return RuntimeConfiguration(
+        requested_route=requested_route_value,
+        configured_backend_identity=backend_identity,
+        reasoning_effort=known("effort-policy", "v2"),
+        prompt_policy=known("prompt-policy", "v9"),
+        retrieval=known("retrieval-policy", "disabled-v1"),
+        tools=known("tool-policy", "disabled-v1"),
+        memory=known("memory-policy", "disabled-v1"),
+        topology=known("configured-topology", "single-route-v3"),
+        routing_policy=known("routing-policy", "primary-only-v2"),
+        in_loop_evaluators=known(
+            "in-loop-evaluator-bundle",
+            "disabled-v1",
+        ),
+        cache=known("cache-policy", "scope-v1"),
+        budgets=known("budget-policy", "v4"),
+        fallback=known("fallback-policy", "disabled-v1"),
+        tokenizer=known("tokenizer", "revision-8"),
+        sampling=known("sampling-policy", "greedy-v2"),
+        adapter=NotApplicable(reason="no adapter is loaded"),
+        locale=NotApplicable(reason="no locale surface exists"),
+        runtime_sandbox=known("sandbox", "revision-3"),
+        hardware_kernel=UnknownIdentity(
+            provider_or_boundary="hosted-runtime",
+            observed_on=date(2026, 7, 20),
+            public_identity="provider-owned-numerical-kernel",
+            reason="the present numerical kernel is not disclosed",
+        ),
+        external_services=NotApplicable(reason="no external service exists"),
+        concurrency_scheduler=NotApplicable(
+            reason="no concurrent scheduler exists",
+        ),
+        conditional_presence={
+            "tokenizer": "present",
+            "sampling": "present",
+            "adapter": "absent",
+            "locale": "absent",
+            "runtime_sandbox": "present",
+            "hardware_kernel": "present",
+            "external_services": "absent",
+            "concurrency_scheduler": "absent",
+        },
+    )
+
+
+def fully_known_runtime(
+    requested_route_value: KnownIdentity,
+    backend_identity: KnownIdentity | UnknownIdentity | None = None,
+) -> RuntimeConfiguration:
+    configured = runtime(requested_route_value, backend_identity)
+    payload = configured.model_dump(
+        mode="python",
+        exclude={
+            "configuration_digest",
+            "runtime_verification_digest",
+            "all_behavior_known",
+        },
+    )
+    payload["hardware_kernel"] = known("numerical-kernel", "v3")
+    return RuntimeConfiguration.model_validate(payload)
+
+
+def population() -> PopulationIdentity:
+    return PopulationIdentity(
+        dataset_population=known("case-population", "slice-2026-07"),
+    )
+
+
+def evaluators() -> EvaluatorContract:
+    return EvaluatorContract(
+        evaluators=known("evaluator-contract", "rubric-v5"),
+    )
+
+
+def controlled_plan(
+    pop: PopulationIdentity,
+    evaluator_contract: EvaluatorContract,
+) -> ComparisonPlan:
+    baseline_route = requested_route("route-v1")
+    candidate_route = requested_route("route-v2")
+    baseline_runtime = fully_known_runtime(baseline_route)
+    candidate_runtime = fully_known_runtime(candidate_route)
+    held = tuple(
+        field for field in ALL_RUNTIME_SURFACES if field != "requested_route"
+    ) + ("dataset_population", "evaluators")
+    return ComparisonPlan(
+        mode="controlled",
+        configuration_digests={
+            "baseline": baseline_runtime.configuration_digest,
+            "candidate": candidate_runtime.configuration_digest,
+        },
+        population=pop,
+        evaluators=evaluator_contract,
+        varied_fields=("requested_route",),
+        held_constant_fields=held,
+        declared_arm_values={
+            "baseline": {"requested_route": baseline_route},
+            "candidate": {"requested_route": candidate_route},
+        },
+    )
+
+
+def observation(
+    suffix: str = "a",
+    observed_on: date = date(2026, 7, 20),
+    *,
+    realized_route: str = "primary",
+    realized_backend_identity: KnownIdentity | UnknownIdentity | None = None,
+    execution_path_digest: str | None = None,
+    fallback_decisions: tuple[str, ...] = ("primary-selected",),
+    service_invocations: tuple[str, ...] = (),
+) -> RunObservationReceipt:
+    if realized_backend_identity is None:
+        realized_backend_identity = provider_checkpoint("backend-v1")
+    backend_evidence = (
+        run_bound_evidence(
+            suffix,
+            realized_backend_identity,
+            observed_on=observed_on,
+        )
+        if isinstance(realized_backend_identity, KnownIdentity)
+        else None
+    )
+    return RunObservationReceipt(
+        run_id=f"run-{suffix}",
+        request_id=f"request-{suffix}",
+        randomness_provenance=f"provider-request-{suffix}",
+        realized_route=realized_route,
+        realized_backend_identity=realized_backend_identity,
+        run_bound_backend_evidence=backend_evidence,
+        execution_path_digest=(
+            execution_path_digest or digest(f"execution-{suffix}")
+        ),
+        fallback_decisions=fallback_decisions,
+        service_invocations=service_invocations,
+        realized_output_digest=digest(suffix),
+        observed_effects_digest=digest("e"),
+        observed_on=observed_on,
+    )
+
+
+def controlled_subject(
+    arm: Literal["baseline", "candidate"] = "baseline",
+    *,
+    verified_on: date = date(2026, 7, 1),
+) -> EvaluationSubject:
+    pop = population()
+    evaluator_contract = evaluators()
+    plan = controlled_plan(pop, evaluator_contract)
+    route = plan.declared_arm_values[arm]["requested_route"]
+    assert isinstance(route, KnownIdentity)
+    backend = provider_checkpoint(
+        "backend-v1",
+        verified_on=verified_on,
+    )
+    configured = fully_known_runtime(route, backend)
+    return EvaluationSubject(
+        runtime=configured,
+        population=pop,
+        evaluators=evaluator_contract,
+        comparison_plan=plan,
+        arm=arm,
+        evaluated_on=date(2026, 7, 20),
+        run_observation=observation(arm),
+    )
+
+
+def whole_subject_with_unknown_tokenizer() -> EvaluationSubject:
+    pop = population()
+    evaluator_contract = evaluators()
+    plan = ComparisonPlan(
+        mode="whole_subject",
+        configuration_digests={},
+        population=pop,
+        evaluators=evaluator_contract,
+        varied_fields=(),
+        held_constant_fields=(),
+        declared_arm_values={},
+    )
+    configured = runtime(requested_route("route-v1")).validated_copy(
+        update={
+            "tokenizer": UnknownIdentity(
+                provider_or_boundary="hosted-provider",
+                observed_on=date(2026, 7, 20),
+                public_identity="provider-owned-tokenizer",
+                reason="provider does not disclose a tokenizer revision",
+            ),
+        },
+    )
+    return EvaluationSubject(
+        runtime=configured,
+        population=pop,
+        evaluators=evaluator_contract,
+        comparison_plan=plan,
+        arm=None,
+        evaluated_on=date(2026, 7, 20),
+        run_observation=observation(),
+    )
+
+
+def runtime_input(configured: RuntimeConfiguration) -> dict[str, object]:
+    return configured.model_dump(
+        mode="python",
+        exclude={
+            "configuration_digest",
+            "runtime_verification_digest",
+            "all_behavior_known",
+        },
+    )
+
+
+def subject_input(subject: EvaluationSubject) -> dict[str, object]:
+    plan = subject.comparison_plan
+    return {
+        "runtime": runtime_input(subject.runtime),
+        "population": subject.population.model_dump(
+            mode="python",
+            exclude={"population_digest"},
+        ),
+        "evaluators": subject.evaluators.model_dump(
+            mode="python",
+            exclude={"evaluator_digest"},
+        ),
+        "comparison_plan": {
+            "mode": plan.mode,
+            "configuration_digests": plan.configuration_digests,
+            "population": plan.population.model_dump(
+                mode="python",
+                exclude={"population_digest"},
+            ),
+            "evaluators": plan.evaluators.model_dump(
+                mode="python",
+                exclude={"evaluator_digest"},
+            ),
+            "varied_fields": plan.varied_fields,
+            "held_constant_fields": plan.held_constant_fields,
+            "declared_arm_values": plan.declared_arm_values,
+        },
+        "arm": subject.arm,
+        "evaluated_on": subject.evaluated_on,
+        "run_observation": subject.run_observation.model_dump(
+            mode="python",
+            exclude={"observation_digest"},
+        ),
+    }
+
+
+def with_cache(
+    subject: EvaluationSubject,
+    cache: KnownIdentity | UnknownIdentity,
+) -> EvaluationSubject:
+    payload = subject_input(subject)
+    configured = dict(cast(dict[str, object], payload["runtime"]))
+    configured["cache"] = cache
+    payload["runtime"] = configured
+    return EvaluationSubject.model_validate(payload)
+
+
+def forged_configured_backend(
+    backend: KnownIdentity,
+    forgery_path: Literal["model_copy", "model_construct"],
+) -> KnownIdentity:
+    update = {
+        "identity_basis": "operator_configured_exact_value",
+        "identity_evidence": None,
+    }
+    if forgery_path == "model_copy":
+        return backend.model_copy(update=update)
+    payload = backend.model_dump(
+        mode="python",
+        exclude_computed_fields=True,
+    )
+    payload.update(update)
+    return KnownIdentity.model_construct(**payload)
+
+
+def subject_with_forged_configured_backend(
+    subject: EvaluationSubject,
+    forgery_path: Literal["model_copy", "model_construct"],
+) -> EvaluationSubject:
+    backend = subject.runtime.configured_backend_identity
+    assert isinstance(backend, KnownIdentity)
+    forged_backend = forged_configured_backend(backend, forgery_path)
+    forged_runtime = subject.runtime.model_copy(
+        update={"configured_backend_identity": forged_backend},
+    )
+    return subject.model_copy(update={"runtime": forged_runtime})
+
+
+def assign_item(mapping: object, key: object, value: object) -> None:
+    cast(dict[object, object], mapping)[key] = value
+
+
+def delete_item(mapping: object, key: object) -> None:
+    del cast(dict[object, object], mapping)[key]
+
+
+def test_complete_subject_has_stable_digest() -> None:
+    subject = controlled_subject()
+    reconstructed = EvaluationSubject.model_validate(subject_input(subject))
+    assert re.fullmatch(SHA256_PATTERN, subject.receipt_digest)
+    assert reconstructed.receipt_digest == subject.receipt_digest
+
+
+def test_required_field_change_changes_digest() -> None:
+    original = controlled_subject().runtime
+    payload = runtime_input(original)
+    payload["cache"] = known("cache-policy", "scope-v2")
+    changed = RuntimeConfiguration.model_validate(payload)
+    assert changed.configuration_digest != original.configuration_digest
+
+
+def test_run_provenance_changes_receipt_not_configuration() -> None:
+    original = controlled_subject()
+    payload = subject_input(original)
+    payload["run_observation"] = observation("different")
+    replay = EvaluationSubject.model_validate(payload)
+    assert replay.configuration_digest == original.configuration_digest
+    assert (
+        replay.run_observation.observation_digest
+        != original.run_observation.observation_digest
+    )
+    assert replay.receipt_digest != original.receipt_digest
+
+
+def test_reverification_changes_evidence_not_configuration() -> None:
+    first = controlled_subject(verified_on=date(2026, 7, 1))
+    second = controlled_subject(verified_on=date(2026, 7, 2))
+    assert first.configuration_digest == second.configuration_digest
+    assert first.verification_digest != second.verification_digest
+    assert first.receipt_digest != second.receipt_digest
+
+
+def test_explanatory_na_reason_does_not_change_configuration() -> None:
+    original = controlled_subject().runtime
+    payload = runtime_input(original)
+    payload["adapter"] = NotApplicable(
+        reason="the adapter surface is genuinely absent",
+    )
+    revised = RuntimeConfiguration.model_validate(payload)
+    assert revised.configuration_digest == original.configuration_digest
+    assert (
+        revised.runtime_verification_digest
+        != original.runtime_verification_digest
+    )
+
+
+def test_schema_version_is_bound_into_canonical_digests() -> None:
+    value = {"behavior": "same"}
+    assert SCHEMA_VERSION == "evaluation-subject-v3"
+    assert canonical_sha256(
+        {"schema_version": SCHEMA_VERSION, "value": value},
+    ) != canonical_sha256(
+        {"schema_version": "evaluation-subject-v4", "value": value},
+    )
+
+
+@pytest.mark.parametrize("field", ("cache", "fallback", "tokenizer"))
+def test_missing_required_or_conditional_field_fails(field: str) -> None:
+    payload = subject_input(controlled_subject())
+    configured = dict(cast(dict[str, object], payload["runtime"]))
+    del configured[field]
+    payload["runtime"] = configured
+    with pytest.raises(ValidationError):
+        EvaluationSubject.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "revision",
+    (
+        "latest",
+        "current",
+        "production",
+        "default",
+        "claude-sonnet-latest",
+        "route-a",
+        "   ",
+    ),
+)
+def test_mutable_or_blank_revisions_fail(revision: str) -> None:
+    with pytest.raises(ValidationError):
+        KnownIdentity(identifier="route", revision=revision, digest=digest())
+
+
+@pytest.mark.parametrize(
+    "revision",
+    ("v1", "claude-sonnet-5-5-20261001", "slice-2026-07", "1.4.2"),
+)
+def test_pinned_revisions_pass(revision: str) -> None:
+    identity = KnownIdentity(identifier="route", revision=revision, digest=digest())
+    assert identity.revision == revision
+
+
+def test_whitespace_only_identity_text_fails() -> None:
+    invalid_builders = (
+        lambda: KnownIdentity(identifier="   ", revision="v1", digest=digest()),
+        lambda: UnknownIdentity(
+            provider_or_boundary="   ",
+            observed_on=date(2026, 7, 20),
+            public_identity="public-route",
+            reason="not observable",
+        ),
+        lambda: UnknownIdentity(
+            provider_or_boundary="provider",
+            observed_on=date(2026, 7, 20),
+            public_identity="   ",
+            reason="not observable",
+        ),
+        lambda: UnknownIdentity(
+            provider_or_boundary="provider",
+            observed_on=date(2026, 7, 20),
+            public_identity="public-route",
+            reason="   ",
+        ),
+        lambda: NotApplicable(reason="   "),
+    )
+    for build in invalid_builders:
+        with pytest.raises(ValidationError):
+            build()
+
+
+def test_malformed_or_missing_content_digest_fails() -> None:
+    with pytest.raises(ValidationError):
+        KnownIdentity(
+            identifier="artifact",
+            revision="v1",
+            digest="sha256:not-a-digest",
+        )
+    with pytest.raises(ValidationError):
+        KnownIdentity(identifier="artifact", revision="v1")
+
+
+def test_digest_is_one_prefixed_type() -> None:
+    bare = "a" * 64
+    assert re.fullmatch(SHA256_PATTERN, canonical_sha256({"k": 1}))
+    with pytest.raises(ValidationError):
+        KnownIdentity(identifier="artifact", revision="v1", digest=bare)
+    with pytest.raises(ValidationError):
+        IdentityEvidenceReceipt(
+            claimed_identifier="route",
+            claimed_revision="v1",
+            verifier_boundary="identity-registry",
+            method="registered_immutable_release",
+            evidence_locator="registry://route",
+            evidence_digest=bare,
+            verified_on=date(2026, 7, 1),
+        )
+
+
+def test_missing_or_mismatched_provider_receipt_fails() -> None:
+    with pytest.raises(ValidationError):
+        KnownIdentity(
+            identifier="hosted-route",
+            revision="checkpoint-v1",
+            identity_basis="provider_observed_revision",
+        )
+    receipt = IdentityEvidenceReceipt(
+        claimed_identifier="different-route",
+        claimed_revision="checkpoint-v1",
+        verifier_boundary="identity-registry",
+        method="registered_immutable_release",
+        evidence_locator="registry://different-route",
+        evidence_digest=digest("b"),
+        verified_on=date(2026, 7, 1),
+    )
+    with pytest.raises(ValidationError):
+        KnownIdentity(
+            identifier="hosted-route",
+            revision="checkpoint-v1",
+            identity_basis="provider_observed_revision",
+            identity_evidence=receipt,
+        )
+    with pytest.raises(ValidationError):
+        KnownIdentity(
+            identifier="different-route",
+            revision="checkpoint-v2",
+            identity_basis="provider_observed_revision",
+            identity_evidence=receipt,
+        )
+
+
+def test_exact_unexpired_provider_binding_validates() -> None:
+    subject = controlled_subject()
+    backend = subject.runtime.configured_backend_identity
+    assert isinstance(backend, KnownIdentity)
+    assert backend.identity_evidence is not None
+    assert backend.identity_evidence.claimed_identifier == backend.identifier
+    assert backend.identity_evidence.claimed_revision == backend.revision
+
+
+def test_future_or_expired_verification_fails() -> None:
+    with pytest.raises(ValidationError):
+        controlled_subject(verified_on=date(2026, 7, 21))
+
+    expired = provider_checkpoint(
+        "backend-v1",
+        verified_on=date(2026, 7, 1),
+        expires_on=date(2026, 7, 19),
+    )
+    payload = subject_input(controlled_subject())
+    configured = dict(cast(dict[str, object], payload["runtime"]))
+    configured["configured_backend_identity"] = expired
+    payload["runtime"] = configured
+    with pytest.raises(ValidationError):
+        EvaluationSubject.model_validate(payload)
+
+
+def test_future_unknown_and_run_observations_fail() -> None:
+    payload = subject_input(whole_subject_with_unknown_tokenizer())
+    configured = dict(cast(dict[str, object], payload["runtime"]))
+    configured["tokenizer"] = UnknownIdentity(
+        provider_or_boundary="hosted-provider",
+        observed_on=date(2026, 7, 21),
+        public_identity="provider-owned-tokenizer",
+        reason="not disclosed",
+    )
+    payload["runtime"] = configured
+    with pytest.raises(ValidationError):
+        EvaluationSubject.model_validate(payload)
+
+    payload = subject_input(controlled_subject())
+    payload["run_observation"] = observation(
+        "future",
+        observed_on=date(2026, 7, 21),
+    )
+    with pytest.raises(ValidationError):
+        EvaluationSubject.model_validate(payload)
+
+
+def test_reassignment_fails_because_identity_is_frozen() -> None:
+    identity = known("artifact", "v1")
+    with pytest.raises(ValidationError):
+        identity.revision = "v2"
+
+
+def test_nested_mappings_are_deeply_immutable_and_order_stable() -> None:
+    subject = controlled_subject()
+    plan = subject.comparison_plan
+    configuration_digest = subject.configuration_digest
+    comparison_plan_digest = plan.comparison_plan_digest
+    receipt_digest = subject.receipt_digest
+    baseline_values = plan.declared_arm_values["baseline"]
+
+    attempts = (
+        (
+            subject.runtime.conditional_presence,
+            "adapter",
+            "present",
+        ),
+        (
+            plan.configuration_digests,
+            "baseline",
+            digest("mutated-configuration"),
+        ),
+        (
+            plan.declared_arm_values,
+            "baseline",
+            {},
+        ),
+        (
+            baseline_values,
+            "requested_route",
+            known("mutated-route", "v1"),
+        ),
+    )
+    for mapping, key, value in attempts:
+        with pytest.raises(TypeError):
+            assign_item(mapping, key, value)
+        with pytest.raises(TypeError):
+            delete_item(mapping, key)
+
+    assert subject.configuration_digest == configuration_digest
+    assert plan.comparison_plan_digest == comparison_plan_digest
+    assert subject.receipt_digest == receipt_digest
+
+    runtime_payload = runtime_input(subject.runtime)
+    runtime_payload["conditional_presence"] = dict(
+        reversed(tuple(subject.runtime.conditional_presence.items())),
+    )
+    reconstructed_runtime = RuntimeConfiguration.model_validate(
+        runtime_payload,
+    )
+    assert reconstructed_runtime.configuration_digest == configuration_digest
+
+    plan_payload = dict(
+        cast(
+            dict[str, object],
+            subject_input(subject)["comparison_plan"],
+        ),
+    )
+    plan_payload["configuration_digests"] = dict(
+        reversed(tuple(plan.configuration_digests.items())),
+    )
+    plan_payload["declared_arm_values"] = {
+        arm: dict(reversed(tuple(values.items())))
+        for arm, values in reversed(tuple(plan.declared_arm_values.items()))
+    }
+    reconstructed_plan = ComparisonPlan.model_validate(plan_payload)
+    assert reconstructed_plan.comparison_plan_digest == comparison_plan_digest
+
+
+def test_in_loop_evaluator_change_changes_configuration_identity() -> None:
+    original = fully_known_runtime(requested_route("route-v1"))
+    payload = runtime_input(original)
+    payload["in_loop_evaluators"] = known(
+        "in-loop-evaluator-bundle",
+        "reranker-rubric-v2",
+    )
+    changed = RuntimeConfiguration.model_validate(payload)
+    assert changed.configuration_digest != original.configuration_digest
+
+
+def test_post_hoc_evaluator_changes_measurement_not_configuration() -> None:
+    original = whole_subject_with_unknown_tokenizer()
+    replacement = EvaluatorContract(
+        evaluators=known("post-hoc-evaluator-contract", "rubric-v6"),
+    )
+    replacement_plan = ComparisonPlan(
+        mode="whole_subject",
+        configuration_digests={},
+        population=original.population,
+        evaluators=replacement,
+        varied_fields=(),
+        held_constant_fields=(),
+        declared_arm_values={},
+    )
+    changed = EvaluationSubject(
+        runtime=original.runtime,
+        population=original.population,
+        evaluators=replacement,
+        comparison_plan=replacement_plan,
+        arm=None,
+        evaluated_on=original.evaluated_on,
+        run_observation=original.run_observation,
+    )
+    assert changed.configuration_digest == original.configuration_digest
+    assert changed.evaluators.evaluator_digest != (
+        original.evaluators.evaluator_digest
+    )
+    assert changed.receipt_digest != original.receipt_digest
+
+
+def test_requested_route_and_backend_identity_boundaries() -> None:
+    route = requested_route("route-v1")
+    configured = runtime(route)
+    assert configured.requested_route == route
+
+    payload = runtime_input(configured)
+    payload["configured_backend_identity"] = route
+    with pytest.raises(ValidationError):
+        RuntimeConfiguration.model_validate(payload)
+
+    observation_payload = observation().model_dump(
+        mode="python",
+        exclude={"observation_digest"},
+    )
+    observation_payload["realized_backend_identity"] = route
+    with pytest.raises(ValidationError):
+        RunObservationReceipt.model_validate(observation_payload)
+
+    backend = provider_checkpoint("backend-v1")
+    assert runtime(route, backend).configured_backend_identity == backend
+    assert (
+        observation(realized_backend_identity=backend).realized_backend_identity
+        == backend
+    )
+
+
+def test_unknown_backend_makes_identity_gate_inconclusive() -> None:
+    unknown_backend = UnknownIdentity(
+        provider_or_boundary="hosted-provider",
+        observed_on=date(2026, 7, 20),
+        public_identity="requested-route",
+        reason="the serving backend is not disclosed",
+    )
+    pop = population()
+    evaluator_contract = evaluators()
+    configured = runtime(requested_route("route-v1"), unknown_backend)
+    plan = ComparisonPlan(
+        mode="whole_subject",
+        configuration_digests={},
+        population=pop,
+        evaluators=evaluator_contract,
+        varied_fields=(),
+        held_constant_fields=(),
+        declared_arm_values={},
+    )
+    subject = EvaluationSubject(
+        runtime=configured,
+        population=pop,
+        evaluators=evaluator_contract,
+        comparison_plan=plan,
+        arm=None,
+        evaluated_on=date(2026, 7, 20),
+        run_observation=observation(
+            realized_backend_identity=unknown_backend,
+        ),
+    )
+    assert isinstance(
+        subject.run_observation.realized_backend_identity,
+        UnknownIdentity,
+    )
+    verdict = AttributionIdentityGate(
+        baseline=subject,
+        candidate=subject,
+        claimed_treatment_scope=(),
+    ).verdict
+    assert verdict.status == "INCONCLUSIVE"
+    assert verdict.reasons[0].code == "whole_subject_mode"
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("topology", known("configured-topology", "two-stage-v4")),
+        ("routing_policy", known("routing-policy", "conditional-v3")),
+    ),
+)
+def test_configured_topology_or_routing_changes_configuration_identity(
+    field: str,
+    replacement: KnownIdentity,
+) -> None:
+    original = fully_known_runtime(requested_route("route-v1"))
+    payload = runtime_input(original)
+    payload[field] = replacement
+    changed = RuntimeConfiguration.model_validate(payload)
+    assert changed.configuration_digest != original.configuration_digest
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("realized_route", "fallback-route"),
+        (
+            "realized_backend_identity",
+            provider_checkpoint("backend-v2"),
+        ),
+        ("execution_path_digest", digest("different-execution-path")),
+        ("fallback_decisions", ("primary-failed", "fallback-selected")),
+        ("service_invocations", ("retrieval-service-v3",)),
+    ),
+)
+def test_realized_execution_changes_observation_not_configuration(
+    field: str,
+    replacement: object,
+) -> None:
+    original = controlled_subject()
+    payload = subject_input(original)
+    run_payload = dict(
+        cast(dict[str, object], payload["run_observation"]),
+    )
+    run_payload[field] = replacement
+    if field == "realized_backend_identity":
+        assert isinstance(replacement, KnownIdentity)
+        run_payload["run_bound_backend_evidence"] = run_bound_evidence(
+            original.arm or "whole",
+            replacement,
+        )
+    payload["run_observation"] = run_payload
+    changed = EvaluationSubject.model_validate(payload)
+    assert changed.configuration_digest == original.configuration_digest
+    assert changed.run_observation.observation_digest != (
+        original.run_observation.observation_digest
+    )
+    assert changed.receipt_digest != original.receipt_digest
+
+
+def test_present_but_hidden_provider_surface_is_unknown_not_na() -> None:
+    subject = whole_subject_with_unknown_tokenizer()
+    assert isinstance(subject.runtime.tokenizer, UnknownIdentity)
+    assert isinstance(subject.runtime.hardware_kernel, UnknownIdentity)
+
+
+def test_absent_adapter_with_na_validates() -> None:
+    configured = runtime(requested_route("route-v1"))
+    assert configured.conditional_presence["adapter"] == "absent"
+    assert isinstance(configured.adapter, NotApplicable)
+
+
+def test_present_adapter_with_na_fails() -> None:
+    configured = runtime(requested_route("route-v1"))
+    payload = runtime_input(configured)
+    presence = dict(payload["conditional_presence"])
+    presence["adapter"] = "present"
+    payload["conditional_presence"] = presence
+    with pytest.raises(ValidationError):
+        RuntimeConfiguration.model_validate(payload)
+
+
+def test_absent_adapter_with_known_value_fails() -> None:
+    configured = runtime(requested_route("route-v1"))
+    payload = runtime_input(configured)
+    payload["adapter"] = known("adapter", "v1")
+    with pytest.raises(ValidationError):
+        RuntimeConfiguration.model_validate(payload)
+
+
+def test_na_is_rejected_for_required_surface() -> None:
+    payload = subject_input(controlled_subject())
+    configured = dict(cast(dict[str, object], payload["runtime"]))
+    configured["cache"] = NotApplicable(reason="cache exists but is hidden")
+    payload["runtime"] = configured
+    with pytest.raises(ValidationError):
+        EvaluationSubject.model_validate(payload)
+
+
+def test_extra_fields_population_and_evaluator_disagreement_fail() -> None:
+    payload = subject_input(controlled_subject())
+    payload["undeclared"] = "not allowed"
+    with pytest.raises(ValidationError):
+        EvaluationSubject.model_validate(payload)
+
+    payload = subject_input(controlled_subject())
+    plan = dict(cast(dict[str, object], payload["comparison_plan"]))
+    plan["population"] = PopulationIdentity(
+        dataset_population=known("case-population", "slice-2026-08"),
+    ).model_dump(mode="python", exclude={"population_digest"})
+    payload["comparison_plan"] = plan
+    with pytest.raises(ValidationError):
+        EvaluationSubject.model_validate(payload)
+
+    payload = subject_input(controlled_subject())
+    payload["evaluators"] = EvaluatorContract(
+        evaluators=known("evaluator-contract", "rubric-v6"),
+    ).model_dump(mode="python", exclude={"evaluator_digest"})
+    with pytest.raises(ValidationError):
+        EvaluationSubject.model_validate(payload)
+
+
+def adapter_treatment_subject(
+    arm: Literal["baseline", "candidate"],
+) -> EvaluationSubject:
+    pop = population()
+    evaluator_contract = evaluators()
+    baseline_value = NotApplicable(reason="no adapter is loaded")
+    candidate_value = known("adapter", "adapter-v2")
+    held = tuple(
+        field for field in ALL_RUNTIME_SURFACES if field != "adapter"
+    ) + ("dataset_population", "evaluators")
+    runtimes: dict[str, RuntimeConfiguration] = {}
+    for current_arm, value in (
+        ("baseline", baseline_value),
+        ("candidate", candidate_value),
+    ):
+        payload = runtime_input(
+            runtime(requested_route("route-v1")),
+        )
+        payload["hardware_kernel"] = known("numerical-kernel", "v3")
+        payload["adapter"] = value
+        presence = dict(payload["conditional_presence"])
+        presence["adapter"] = (
+            "absent" if current_arm == "baseline" else "present"
+        )
+        payload["conditional_presence"] = presence
+        runtimes[current_arm] = RuntimeConfiguration.model_validate(
+            payload,
+        )
+    plan = ComparisonPlan(
+        mode="controlled",
+        configuration_digests={
+            key: value.configuration_digest
+            for key, value in runtimes.items()
+        },
+        population=pop,
+        evaluators=evaluator_contract,
+        varied_fields=("adapter",),
+        held_constant_fields=held,
+        declared_arm_values={
+            "baseline": {"adapter": baseline_value},
+            "candidate": {"adapter": candidate_value},
+        },
+    )
+    return EvaluationSubject(
+        runtime=runtimes[arm],
+        population=pop,
+        evaluators=evaluator_contract,
+        comparison_plan=plan,
+        arm=arm,
+        evaluated_on=date(2026, 7, 20),
+        run_observation=observation(f"adapter-{arm}"),
+    )
+
+
+def test_na_to_known_adapter_treatment_validates() -> None:
+    baseline = adapter_treatment_subject("baseline")
+    candidate = adapter_treatment_subject("candidate")
+    assert compare_subjects(baseline, candidate).status == "COMPARABLE"
+
+
+def test_unknown_treatment_is_rejected() -> None:
+    pop = population()
+    evaluator_contract = evaluators()
+    held = tuple(
+        field for field in ALL_RUNTIME_SURFACES if field != "adapter"
+    ) + ("dataset_population", "evaluators")
+    with pytest.raises(ValidationError):
+        ComparisonPlan.model_validate(
+            {
+                "mode": "controlled",
+                "configuration_digests": {
+                    "baseline": digest("baseline"),
+                    "candidate": digest("candidate"),
+                },
+                "population": pop,
+                "evaluators": evaluator_contract,
+                "varied_fields": ("adapter",),
+                "held_constant_fields": held,
+                "declared_arm_values": {
+                    "baseline": {
+                        "adapter": {
+                            "kind": "unknown",
+                            "provider_or_boundary": "provider",
+                            "observed_on": date(2026, 7, 20),
+                            "public_identity": "adapter",
+                            "reason": "not disclosed",
+                        },
+                    },
+                    "candidate": {
+                        "adapter": known("adapter", "adapter-v2"),
+                    },
+                },
+            },
+        )
+
+
+def controlled_pair_with_candidate_cache(
+    cache: KnownIdentity | UnknownIdentity,
+) -> tuple[EvaluationSubject, EvaluationSubject]:
+    pop = population()
+    evaluator_contract = evaluators()
+    baseline_route = requested_route("route-v1")
+    candidate_route = requested_route("route-v2")
+    baseline_runtime = fully_known_runtime(baseline_route)
+    payload = runtime_input(fully_known_runtime(candidate_route))
+    payload["cache"] = cache
+    candidate_runtime = RuntimeConfiguration.model_validate(payload)
+    held = tuple(
+        field for field in ALL_RUNTIME_SURFACES if field != "requested_route"
+    ) + ("dataset_population", "evaluators")
+    plan = ComparisonPlan(
+        mode="controlled",
+        configuration_digests={
+            "baseline": baseline_runtime.configuration_digest,
+            "candidate": candidate_runtime.configuration_digest,
+        },
+        population=pop,
+        evaluators=evaluator_contract,
+        varied_fields=("requested_route",),
+        held_constant_fields=held,
+        declared_arm_values={
+            "baseline": {"requested_route": baseline_route},
+            "candidate": {"requested_route": candidate_route},
+        },
+    )
+    subjects = tuple(
+        EvaluationSubject(
+            runtime=(
+                baseline_runtime if arm == "baseline" else candidate_runtime
+            ),
+            population=pop,
+            evaluators=evaluator_contract,
+            comparison_plan=plan,
+            arm=arm,
+            evaluated_on=date(2026, 7, 20),
+            run_observation=observation(arm),
+        )
+        for arm in ("baseline", "candidate")
+    )
+    return cast(tuple[EvaluationSubject, EvaluationSubject], subjects)
+
+
+def test_comparison_and_undeclared_change_verdicts() -> None:
+    baseline = controlled_subject("baseline")
+    candidate = controlled_subject("candidate")
+    assert compare_subjects(baseline, candidate).status == "COMPARABLE"
+
+    with pytest.raises(ValidationError):
+        with_cache(candidate, known("cache-policy", "scope-v2"))
+
+    mismatched_pair = controlled_pair_with_candidate_cache(
+        known("cache-policy", "scope-v2"),
+    )
+    mismatch = compare_subjects(*mismatched_pair)
+    assert mismatch.status == "NOT_COMPARABLE"
+    assert mismatch.reasons[0].code == "held_constant_mismatch"
+
+    unknown_pair = controlled_pair_with_candidate_cache(
+        UnknownIdentity(
+            provider_or_boundary="cache-provider",
+            observed_on=date(2026, 7, 20),
+            public_identity="cache-policy",
+            reason="cache revision is not observable",
+        ),
+    )
+    inconclusive = compare_subjects(*unknown_pair)
+    assert inconclusive.status == "INCONCLUSIVE"
+    assert inconclusive.reasons[0].code == "unknown_held_constant"
+
+
+def test_known_backend_requires_run_bound_evidence() -> None:
+    payload = observation().model_dump(
+        mode="python",
+        exclude={"observation_digest"},
+    )
+    payload["run_bound_backend_evidence"] = None
+    with pytest.raises(
+        ValidationError,
+        match="known realized backend requires run-bound evidence",
+    ):
+        RunObservationReceipt.model_validate(payload)
+
+
+def test_unknown_backend_forbids_run_bound_evidence() -> None:
+    known_observation = observation()
+    payload = known_observation.model_dump(
+        mode="python",
+        exclude={"observation_digest"},
+    )
+    payload["realized_backend_identity"] = UnknownIdentity(
+        provider_or_boundary="hosted-provider",
+        observed_on=date(2026, 7, 20),
+        public_identity="requested-route",
+        reason="serving backend is not disclosed",
+    )
+    with pytest.raises(
+        ValidationError,
+        match="unknown realized backend forbids run-bound evidence",
+    ):
+        RunObservationReceipt.model_validate(payload)
+
+
+def test_matching_revision_and_run_bound_evidence_succeeds() -> None:
+    receipt = observation()
+    backend = receipt.realized_backend_identity
+    evidence = receipt.run_bound_backend_evidence
+    assert isinstance(backend, KnownIdentity)
+    assert evidence is not None
+    assert evidence.run_id == receipt.run_id
+    assert evidence.request_id == receipt.request_id
+    assert evidence.claimed_backend_identifier == backend.identifier
+    assert evidence.claimed_backend_revision == backend.revision
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    (
+        ("run_id", "run-other", "match run_id"),
+        ("request_id", "request-other", "match request_id"),
+        (
+            "claimed_backend_identifier",
+            "other-backend",
+            "match backend identifier",
+        ),
+        (
+            "claimed_backend_revision",
+            "backend-v2",
+            "match backend revision",
+        ),
+    ),
+)
+def test_run_bound_backend_binding_mismatches_fail(
+    field: str,
+    replacement: str,
+    message: str,
+) -> None:
+    payload = observation().model_dump(
+        mode="python",
+        exclude={"observation_digest"},
+    )
+    evidence = dict(
+        cast(dict[str, object], payload["run_bound_backend_evidence"]),
+    )
+    evidence[field] = replacement
+    payload["run_bound_backend_evidence"] = evidence
+    with pytest.raises(ValidationError, match=message):
+        RunObservationReceipt.model_validate(payload)
+
+
+def test_run_bound_backend_date_ordering_fails_closed() -> None:
+    payload = observation().model_dump(
+        mode="python",
+        exclude={"observation_digest"},
+    )
+    evidence = dict(
+        cast(dict[str, object], payload["run_bound_backend_evidence"]),
+    )
+    evidence["observed_on"] = date(2026, 7, 19)
+    payload["run_bound_backend_evidence"] = evidence
+    with pytest.raises(
+        ValidationError,
+        match="cannot precede run observation",
+    ):
+        RunObservationReceipt.model_validate(payload)
+
+    subject_payload = subject_input(controlled_subject())
+    run_payload = dict(
+        cast(dict[str, object], subject_payload["run_observation"]),
+    )
+    evidence = dict(
+        cast(dict[str, object], run_payload["run_bound_backend_evidence"]),
+    )
+    evidence["observed_on"] = date(2026, 7, 21)
+    run_payload["run_bound_backend_evidence"] = evidence
+    subject_payload["run_observation"] = run_payload
+    with pytest.raises(
+        ValidationError,
+        match="run-bound backend evidence is future-dated",
+    ):
+        EvaluationSubject.model_validate(subject_payload)
+
+
+def test_run_bound_evidence_changes_observation_not_configuration() -> None:
+    original = controlled_subject()
+    payload = subject_input(original)
+    run_payload = dict(
+        cast(dict[str, object], payload["run_observation"]),
+    )
+    evidence = dict(
+        cast(dict[str, object], run_payload["run_bound_backend_evidence"]),
+    )
+    evidence["evidence_digest"] = digest("different-run-bound-evidence")
+    run_payload["run_bound_backend_evidence"] = evidence
+    payload["run_observation"] = run_payload
+    changed = EvaluationSubject.model_validate(payload)
+    assert changed.configuration_digest == original.configuration_digest
+    assert (
+        changed.run_observation.observation_digest
+        != original.run_observation.observation_digest
+    )
+    assert changed.receipt_digest != original.receipt_digest
+
+
+@pytest.mark.parametrize(
+    "forgery_path",
+    ("model_copy", "model_construct"),
+)
+def test_normal_identity_gate_rejects_nested_backend_forgery(
+    forgery_path: Literal["model_copy", "model_construct"],
+) -> None:
+    baseline = controlled_subject("baseline")
+    candidate = controlled_subject("candidate")
+    forged_baseline = subject_with_forged_configured_backend(
+        baseline,
+        forgery_path,
+    )
+    forged_candidate = subject_with_forged_configured_backend(
+        candidate,
+        forgery_path,
+    )
+    for original, forged in (
+        (baseline, forged_baseline),
+        (candidate, forged_candidate),
+    ):
+        assert forged.configuration_digest == original.configuration_digest
+        assert forged.verification_digest != original.verification_digest
+
+    with pytest.raises(
+        ValidationError,
+        match="known backend identity requires provider_observed_revision",
+    ):
+        AttributionIdentityGate(
+            baseline=forged_baseline,
+            candidate=forged_candidate,
+            claimed_treatment_scope=("requested_route",),
+        )
+
+
+@pytest.mark.parametrize(
+    "forgery_path",
+    ("model_copy", "model_construct"),
+)
+def test_cached_json_rejects_nested_backend_forgery(
+    forgery_path: Literal["model_copy", "model_construct"],
+) -> None:
+    forged = subject_with_forged_configured_backend(
+        controlled_subject(),
+        forgery_path,
+    )
+    cached_json = forged.model_dump_json()
+    with pytest.raises(
+        ValidationError,
+        match="known backend identity requires provider_observed_revision",
+    ):
+        EvaluationSubject.model_validate_json(cached_json)
+
+
+@pytest.mark.parametrize(
+    "forgery_path",
+    ("model_copy", "model_construct"),
+)
+def test_validated_copy_rejects_nested_backend_forgery(
+    forgery_path: Literal["model_copy", "model_construct"],
+) -> None:
+    subject = controlled_subject()
+    forged = subject_with_forged_configured_backend(
+        subject,
+        forgery_path,
+    )
+    with pytest.raises(
+        ValidationError,
+        match="known backend identity requires provider_observed_revision",
+    ):
+        subject.validated_copy(update={"runtime": forged.runtime})
+
+
+def test_validated_copy_preserves_provider_evidenced_eligible_control() -> None:
+    baseline = controlled_subject("baseline").validated_copy(update={})
+    candidate = controlled_subject("candidate").validated_copy(update={})
+    verdict = AttributionIdentityGate(
+        baseline=baseline,
+        candidate=candidate,
+        claimed_treatment_scope=("requested_route",),
+    ).verdict
+    assert verdict.status == "ELIGIBLE"
+    assert verdict.reasons == ()
+
+
+def test_valid_single_field_pair_is_eligible_for_exact_treatment_scope() -> None:
+    verdict = AttributionIdentityGate(
+        baseline=controlled_subject("baseline"),
+        candidate=controlled_subject("candidate"),
+        claimed_treatment_scope=("requested_route",),
+    ).verdict
+    assert verdict.status == "ELIGIBLE"
+    assert verdict.reasons == ()
+    assert tuple(AttributionIdentityGate.model_fields) == (
+        "baseline",
+        "candidate",
+        "claimed_treatment_scope",
+    )
+    assert tuple(AttributionIdentityVerdict.model_fields) == ("status", "reasons")
+
+
+@pytest.mark.parametrize("whole_position", ("baseline", "candidate"))
+def test_mixed_comparison_modes_are_rejected(
+    whole_position: Literal["baseline", "candidate"],
+) -> None:
+    whole = whole_subject_with_unknown_tokenizer()
+    controlled_arm = (
+        "candidate" if whole_position == "baseline" else "baseline"
+    )
+    controlled = controlled_subject(controlled_arm)
+    baseline, candidate = (
+        (whole, controlled)
+        if whole_position == "baseline"
+        else (controlled, whole)
+    )
+
+    verdict = AttributionIdentityGate(
+        baseline=baseline,
+        candidate=candidate,
+        claimed_treatment_scope=(),
+    ).verdict
+
+    assert verdict.status == "REJECTED"
+    assert verdict.reasons[0].code == "comparison_plan_mismatch"
+
+
+def test_two_whole_subject_receipts_are_inconclusive() -> None:
+    verdict = AttributionIdentityGate(
+        baseline=whole_subject_with_unknown_tokenizer(),
+        candidate=whole_subject_with_unknown_tokenizer(),
+        claimed_treatment_scope=(),
+    ).verdict
+
+    assert verdict.status == "INCONCLUSIVE"
+    assert verdict.reasons[0].code == "whole_subject_mode"
+
+
+def test_whole_subject_and_material_unknown_are_inconclusive() -> None:
+    whole = whole_subject_with_unknown_tokenizer()
+    whole_verdict = AttributionIdentityGate(
+        baseline=whole,
+        candidate=whole,
+        claimed_treatment_scope=(),
+    ).verdict
+    assert whole_verdict.status == "INCONCLUSIVE"
+    assert whole_verdict.reasons[0].code == "whole_subject_mode"
+
+    baseline, candidate = controlled_pair_with_candidate_cache(
+        UnknownIdentity(
+            provider_or_boundary="cache-provider",
+            observed_on=date(2026, 7, 20),
+            public_identity="cache-policy",
+            reason="cache revision is not observable",
+        ),
+    )
+    unknown_verdict = AttributionIdentityGate(
+        baseline=baseline,
+        candidate=candidate,
+        claimed_treatment_scope=("requested_route",),
+    ).verdict
+    assert unknown_verdict.status == "INCONCLUSIVE"
+    assert unknown_verdict.reasons[0].code == "material_identity_unknown"
+
+
+def test_known_backend_mismatch_precedes_other_unknowns() -> None:
+    baseline, candidate = controlled_pair_with_candidate_cache(
+        UnknownIdentity(
+            provider_or_boundary="cache-provider",
+            observed_on=date(2026, 7, 20),
+            public_identity="cache-policy",
+            reason="cache revision is not observable",
+        ),
+    )
+    payload = subject_input(candidate)
+    payload["run_observation"] = observation(
+        "candidate",
+        realized_backend_identity=provider_checkpoint("backend-v2"),
+    )
+    mismatched_candidate = EvaluationSubject.model_validate(payload)
+    verdict = AttributionIdentityGate(
+        baseline=baseline,
+        candidate=mismatched_candidate,
+        claimed_treatment_scope=("requested_route",),
+    ).verdict
+    assert verdict.status == "REJECTED"
+    assert (
+        verdict.reasons[0].code
+        == "configured_realized_backend_mismatch"
+    )
+
+
+def test_plan_arm_and_claim_scope_failures_are_rejected() -> None:
+    baseline = controlled_subject("baseline")
+    candidate = controlled_subject("candidate")
+    wrong_plan = AttributionIdentityGate(
+        baseline=baseline,
+        candidate=adapter_treatment_subject("candidate"),
+        claimed_treatment_scope=("requested_route",),
+    ).verdict
+    assert wrong_plan.status == "REJECTED"
+    assert wrong_plan.reasons[0].code == "comparison_plan_mismatch"
+
+    wrong_arms = AttributionIdentityGate(
+        baseline=candidate,
+        candidate=baseline,
+        claimed_treatment_scope=("requested_route",),
+    ).verdict
+    assert wrong_arms.status == "REJECTED"
+    assert wrong_arms.reasons[0].code == "arm_pair_invalid"
+
+    wrong_scope = AttributionIdentityGate(
+        baseline=baseline,
+        candidate=candidate,
+        claimed_treatment_scope=("cache",),
+    ).verdict
+    assert wrong_scope.status == "REJECTED"
+    assert wrong_scope.reasons[0].code == "claim_scope_mismatch"
+
+
+def multi_field_treatment_subject(
+    arm: Literal["baseline", "candidate"],
+) -> EvaluationSubject:
+    pop = population()
+    evaluator_contract = evaluators()
+    baseline_route = requested_route("route-v1")
+    candidate_route = requested_route("route-v2")
+    baseline_adapter = NotApplicable(reason="no adapter is loaded")
+    candidate_adapter = known("adapter", "adapter-v2")
+    runtimes: dict[str, RuntimeConfiguration] = {}
+    for current_arm, route, adapter in (
+        ("baseline", baseline_route, baseline_adapter),
+        ("candidate", candidate_route, candidate_adapter),
+    ):
+        payload = runtime_input(fully_known_runtime(route))
+        payload["adapter"] = adapter
+        presence = dict(payload["conditional_presence"])
+        presence["adapter"] = (
+            "absent" if current_arm == "baseline" else "present"
+        )
+        payload["conditional_presence"] = presence
+        runtimes[current_arm] = RuntimeConfiguration.model_validate(payload)
+    varied = ("adapter", "requested_route")
+    held = tuple(
+        field for field in ALL_RUNTIME_SURFACES if field not in varied
+    ) + ("dataset_population", "evaluators")
+    plan = ComparisonPlan(
+        mode="controlled",
+        configuration_digests={
+            name: configured.configuration_digest
+            for name, configured in runtimes.items()
+        },
+        population=pop,
+        evaluators=evaluator_contract,
+        varied_fields=varied,
+        held_constant_fields=held,
+        declared_arm_values={
+            "baseline": {
+                "adapter": baseline_adapter,
+                "requested_route": baseline_route,
+            },
+            "candidate": {
+                "adapter": candidate_adapter,
+                "requested_route": candidate_route,
+            },
+        },
+    )
+    return EvaluationSubject(
+        runtime=runtimes[arm],
+        population=pop,
+        evaluators=evaluator_contract,
+        comparison_plan=plan,
+        arm=arm,
+        evaluated_on=date(2026, 7, 20),
+        run_observation=observation(f"multi-{arm}"),
+    )
+
+
+def test_multi_field_treatment_is_eligible_only_for_joint_scope() -> None:
+    baseline = multi_field_treatment_subject("baseline")
+    candidate = multi_field_treatment_subject("candidate")
+    joint = AttributionIdentityGate(
+        baseline=baseline,
+        candidate=candidate,
+        claimed_treatment_scope=("requested_route", "adapter"),
+    ).verdict
+    isolated = AttributionIdentityGate(
+        baseline=baseline,
+        candidate=candidate,
+        claimed_treatment_scope=("adapter",),
+    ).verdict
+    assert joint.status == "ELIGIBLE"
+    assert isolated.status == "REJECTED"
+    assert isolated.reasons[0].code == "claim_scope_mismatch"
+
+
+def test_multi_field_treatment_rejects_one_noop_field() -> None:
+    pop = population()
+    evaluator_contract = evaluators()
+    baseline_route = requested_route("route-v1")
+    candidate_route = requested_route("route-v2")
+    unchanged_adapter = known("adapter", "adapter-v2")
+    varied = ("adapter", "requested_route")
+    held = tuple(
+        field for field in ALL_RUNTIME_SURFACES if field not in varied
+    ) + ("dataset_population", "evaluators")
+    with pytest.raises(
+        ValidationError,
+        match="every declared treatment field must behaviorally vary",
+    ):
+        ComparisonPlan(
+            mode="controlled",
+            configuration_digests={
+                "baseline": digest("baseline-config"),
+                "candidate": digest("candidate-config"),
+            },
+            population=pop,
+            evaluators=evaluator_contract,
+            varied_fields=varied,
+            held_constant_fields=held,
+            declared_arm_values={
+                "baseline": {
+                    "adapter": unchanged_adapter,
+                    "requested_route": baseline_route,
+                },
+                "candidate": {
+                    "adapter": unchanged_adapter,
+                    "requested_route": candidate_route,
+                },
+            },
+        )

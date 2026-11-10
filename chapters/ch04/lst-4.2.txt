@@ -1,0 +1,231 @@
+# chapters/ch04/lst-4.2.txt
+from typing import Annotated, Optional
+from pydantic import BaseModel, Field, field_validator
+from abc import ABC, abstractmethod
+from enum import IntEnum
+import structlog
+from datetime import datetime
+
+logger = structlog.get_logger()
+
+class TierLevel(IntEnum):
+    """Cognitive Supply Chain tiers, ordered by capability and cost."""
+    REFLEX = 0      # Deterministic (Cache/Regex)
+    PROCESSOR = 1   # SLM (High Throughput)
+    GENERALIST = 2  # Balanced (Standard Agency)
+    REASONER = 3    # SOTA (Planning/Deep Logic)
+
+class TriageResult(BaseModel):
+    """
+    The immutable output schema of the local triage classifier.
+    This contract is logged for every routing decision to enable
+    continuous calibration and audit trails.
+    """
+    predicted_tier: TierLevel = Field(
+        ..., 
+        description="The tier predicted by the distilled classifier."
+    )
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
+        ..., 
+        description="The classifier's softmax confidence in this prediction."
+    )
+    reasoning: str = Field(
+        default="", 
+        description="Optional chain-of-thought justification for transparency."
+    )
+    feature_vector: Optional[list[float]] = Field(
+        default=None, 
+        description="The embedding used for classification (for debugging)."
+    )
+    classifier_version: str = Field(
+        default="v1.0.0",
+        description="Model version for tracking calibration drift."
+    )
+    timestamp: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="Decision timestamp for temporal analysis."
+    )
+    
+    @field_validator('confidence')
+    @classmethod
+    def enforce_calibration(cls, v: float) -> float:
+        """
+        Prevent over-confidence artifacts from uncalibrated models.
+        Many distilled classifiers exhibit softmax saturation (P > 0.999),
+        which breaks the economic decision logic.
+        """
+        if v > 0.99:
+            logger.warning("classifier.overconfidence", raw_confidence=v)
+            return 0.99
+        return v
+
+class Router(ABC):
+    """Abstract interface for all routing strategies."""
+    @abstractmethod
+    def route(self, prompt: str) -> TriageResult:
+        """
+        Analyze the prompt and return a tier prediction with confidence.
+        
+        Args:
+            prompt: The raw user input (pre-validated by the Cognitive Firewall).
+        
+        Returns:
+            TriageResult containing the predicted tier and confidence score.
+        """
+        pass
+
+class TriageRouter:
+    """
+    Production-grade Decision Gate implementing the Confidence Threshold Policy.
+    
+    This class encapsulates the stochastic classifier and applies deterministic
+    fallback logic to ensure system reliability despite model uncertainty.
+    """
+    
+    def __init__(
+        self, 
+        classifier: Router, 
+        confidence_threshold: float = 0.85,
+        fallback_tier: TierLevel = TierLevel.REASONER,
+        telemetry_sample_rate: float = 1.0
+    ):
+        """
+        Args:
+            classifier: A Router instance (typically a distilled Sentence-BERT model).
+            confidence_threshold: The minimum confidence required to trust the prediction.
+            fallback_tier: The "fail-safe" tier used when confidence is below threshold.
+            telemetry_sample_rate: Fraction of decisions to log (1.0 = all, 0.1 = 10%).
+        """
+        self.classifier = classifier
+        self.threshold = confidence_threshold
+        self.fallback_tier = fallback_tier
+        self.telemetry_rate = telemetry_sample_rate
+        
+        # In-memory calibration tracking (production would use time-series DB)
+        self._calibration_buffer: list[tuple[float, bool]] = []
+        
+        logger.info(
+            "triage_router.initialized",
+            threshold=self.threshold,
+            fallback=self.fallback_tier.name,
+            telemetry_rate=self.telemetry_rate
+        )
+    
+    def get_tier(self, prompt: str) -> tuple[TierLevel, TriageResult]:
+        """
+        Execute the Decision Gate logic.
+        
+        Returns:
+            A tuple of (selected_tier, full_triage_result) for logging and telemetry.
+        """
+        result = self.classifier.route(prompt)
+        
+        # The Decision Gate: Confidence-based override
+        if result.confidence >= self.threshold:
+            selected_tier = result.predicted_tier
+            logger.info(
+                "triage.arbitrage_success",
+                tier=selected_tier.name,
+                confidence=result.confidence,
+                threshold=self.threshold,
+                reasoning=result.reasoning[:100]  # Truncate for log economy
+            )
+        else:
+            selected_tier = self.fallback_tier
+            logger.warning(
+                "triage.fallback_triggered",
+                predicted=result.predicted_tier.name,
+                confidence=result.confidence,
+                threshold=self.threshold,
+                reasoning=result.reasoning[:100]
+            )
+        
+        # Telemetry sampling (avoid overwhelming log infrastructure)
+        if self._should_sample():
+            self._emit_telemetry(result, selected_tier)
+        
+        return selected_tier, result
+    
+    def report_outcome(self, result: TriageResult, success: bool) -> None:
+        """
+        Record the actual outcome of a routing decision for calibration tracking.
+        
+        Args:
+            result: The original TriageResult from get_tier().
+            success: Whether the selected tier successfully completed the task.
+        """
+        self._calibration_buffer.append((result.confidence, success))
+        
+        # Trigger calibration check every 1000 decisions
+        if len(self._calibration_buffer) >= 1000:
+            self._check_calibration()
+            self._calibration_buffer.clear()
+    
+    def update_threshold(self, new_threshold: float) -> None:
+        """
+        Dynamic threshold adjustment based on production telemetry.
+        In practice, this would be called by an automated calibration job
+        that analyzes recent routing outcomes and adjusts γ to maintain
+        the target accuracy/cost trade-off.
+        """
+        if not 0.0 <= new_threshold <= 1.0:
+            raise ValueError(f"Threshold must be in [0, 1], got {new_threshold}")
+        
+        old = self.threshold
+        self.threshold = new_threshold
+        logger.info("triage.threshold_updated", old=old, new=new_threshold)
+    
+    def _should_sample(self) -> bool:
+        """Probabilistic sampling for telemetry emission."""
+        import random
+        return random.random() < self.telemetry_rate
+    
+    def _emit_telemetry(self, result: TriageResult, selected: TierLevel) -> None:
+        """Emit structured telemetry for observability pipeline."""
+        logger.info(
+            "triage.decision",
+            predicted_tier=result.predicted_tier.name,
+            selected_tier=selected.name,
+            confidence=result.confidence,
+            classifier_version=result.classifier_version,
+            timestamp=result.timestamp.isoformat()
+        )
+    
+    def _check_calibration(self) -> None:
+        """
+        Compute empirical calibration error from buffered outcomes.
+        Triggers alert if calibration has drifted beyond acceptable bounds.
+        """
+        if not self._calibration_buffer:
+            return
+        
+        # Group by confidence bucket and compute empirical accuracy
+        buckets = {i: [] for i in range(10)}  # 0.0-0.1, 0.1-0.2, ..., 0.9-1.0
+        
+        for conf, success in self._calibration_buffer:
+            bucket = min(int(conf * 10), 9)
+            buckets[bucket].append(success)
+        
+        # Compute expected calibration error (ECE)
+        ece = 0.0
+        total = len(self._calibration_buffer)
+        
+        for bucket_idx, outcomes in buckets.items():
+            if not outcomes:
+                continue
+            
+            predicted_conf = (bucket_idx + 0.5) / 10.0  # Mid-point of bucket
+            empirical_acc = sum(outcomes) / len(outcomes)
+            bucket_weight = len(outcomes) / total
+            
+            ece += bucket_weight * abs(predicted_conf - empirical_acc)
+        
+        if ece > 0.1:  # Alert if ECE exceeds 10%
+            logger.error(
+                "calibration.drift_detected",
+                ece=ece,
+                threshold=self.threshold,
+                sample_size=total
+            )
+
+

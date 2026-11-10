@@ -1,0 +1,43 @@
+# --8<-- [start:lst-18.2]
+{
+  "name": "Synthetic Metrics Specialist",
+  "description": "Summarizes authorized synthetic operational metrics.",
+  "supportedInterfaces": [
+    {
+      "url": "https://metrics.example.com/a2a/v1",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "version": "2.4.0",
+  "capabilities": {
+    "streaming": false
+  },
+  "securitySchemes": {
+    "peerBearer": {
+      "httpAuthSecurityScheme": {
+        "scheme": "Bearer"
+      }
+    }
+  },
+  "securityRequirements": [
+    {
+      "schemes": {
+        "peerBearer": {
+          "list": []
+        }
+      }
+    }
+  ],
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
+  "skills": [
+    {
+      "id": "synthetic-metrics-summary",
+      "name": "Synthetic metrics summary",
+      "description": "Summarizes a bounded window of synthetic metrics.",
+      "tags": ["synthetic", "metrics", "summary"]
+    }
+  ]
+}
+# --8<-- [end:lst-18.2]

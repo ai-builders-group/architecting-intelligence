@@ -1,0 +1,43 @@
+# Agentic Requirements Document (ARD)
+
+## Metadata
+- **Agent Name:** `[domain].[capability].[version]`
+- **Owner:** `[team@company.com]`
+- **Last Updated:** `[YYYY-MM-DD]`
+
+---
+
+## Plane 1: Identity
+### Atomic Goal
+[Single sentence success predicate]
+
+### Non-Goals (MUST NOT)
+- [ ] MUST NOT [action]
+- [ ] MUST NOT [action]
+
+### Cognitive Budget
+- **Tier:** [L1 / L2 / L3]
+- **Latency:** [<Xms]
+- **Cost:** [$X/call]
+
+---
+
+## Plane 2: Cognitive Topology
+### Golden Path
+$$
+\text{Step 1} \xrightarrow{\text{Action}} \text{Step 2}
+\xrightarrow{\text{Action}} \text{Step N}
+$$
+
+### Escalation Topology
+$$
+\text{Escalate} \iff [\text{Boolean Logic}]
+$$
+
+---
+
+## Plane 3: Data Contract
+### Input Schema
+```python
+class Input(BaseModel):
+    ...

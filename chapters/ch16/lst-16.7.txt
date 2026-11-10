@@ -1,0 +1,51 @@
+# Status: non-exhaustive, language-neutral PSEUDOCODE.
+
+REJECTIONS = {
+  INVALID_DECLARATION, INVALID_COEFFICIENT, DUPLICATE_SOURCE,
+  INCOMPATIBLE_LINEAGE, INCOMPATIBLE_TARGET_MAP,
+  INCOMPATIBLE_EXECUTION_ENVELOPE, UNSUPPORTED_OPERATOR,
+  INVALID_ROUTE, MISSING_DEPENDENCY, NONTERMINAL_ROUTE_TARGET,
+  RECOVERY_CYCLE
+}
+
+compile(declaration, immutable_inventory):
+  require COMMON_FIELDS:
+    lineage, configuration, operator_version, execution_envelope,
+    evidence_requirements, fallback_target, rollback_target
+
+  if declaration.kind == WEIGHTED:
+    require unique source_target_members
+    require native_scale_refs, coefficient_bits, effective_multiplier_bits
+    reject invalid_or_negative_coefficient as INVALID_COEFFICIENT
+    reject duplicate_source_target as DUPLICATE_SOURCE
+    normalize by canonical_total_order
+  else if declaration.kind == STACK:
+    require ordered_operator_sources, stack_contract_identity
+    preserve declared order
+  else if declaration.kind == ROUTE:
+    require ordered_predicates, route_input_schema
+    require terminal_branch_targets, mandatory_default
+    reject malformed predicate, branch order, or default as INVALID_ROUTE
+    preserve first_match order
+  else if declaration.kind == MATERIALIZED:
+    require source_identities, effective_multipliers
+    require recipe_tool_identity, output_format_dtype, archive_identity
+    normalize additive members by canonical_total_order
+  else:
+    reject INVALID_DECLARATION
+
+  graph = immutable_inventory.resolve_graph(
+    source, branch, default, fallback, rollback, recursive_candidate edges
+  )
+  reject missing nodes as MISSING_DEPENDENCY
+  reject nonterminal route targets as NONTERMINAL_ROUTE_TARGET
+  reject cycles over the complete graph as RECOVERY_CYCLE
+  reject lineage mismatch as INCOMPATIBLE_LINEAGE
+  reject target-map mismatch as INCOMPATIBLE_TARGET_MAP
+  reject envelope mismatch as INCOMPATIBLE_EXECUTION_ENVELOPE
+  reject unknown operator or stack contract as UNSUPPORTED_OPERATOR
+
+  return CANDIDATE_FOR_EVALUATION(
+    normalized_declaration, graph, evidence_requirements
+  )
+

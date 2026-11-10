@@ -1,0 +1,541 @@
+# chapters/ch17/lst-17.9.txt
+# Dependency: mcp==2.2.0
+# Status: EXECUTABLE_TESTED
+
+from __future__ import annotations
+
+import importlib.metadata
+import math
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
+from typing import Annotated, Final, Literal, Mapping, Self, TypeAlias
+
+from mcp.server import MCPServer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
+
+SDK_VERSION: Final = importlib.metadata.version("mcp")
+if SDK_VERSION != "2.2.0":
+    raise RuntimeError(
+        f"mcp==2.2.0 required; observed {SDK_VERSION}"
+    )
+
+
+SourceId: TypeAlias = Literal[
+    "fixture_primary",
+    "fixture_secondary",
+]
+Metric: TypeAlias = Literal[
+    "request_count",
+    "error_rate",
+]
+Window: TypeAlias = Literal["5m", "15m"]
+Unit: TypeAlias = Literal["requests", "ratio"]
+FiniteValue: TypeAlias = Annotated[
+    float,
+    Field(strict=True, allow_inf_nan=False),
+]
+
+
+HORIZON_START: Final = datetime(
+    2026,
+    9,
+    19,
+    0,
+    0,
+    tzinfo=UTC,
+)
+HORIZON_END: Final = datetime(
+    2026,
+    9,
+    19,
+    1,
+    0,
+    tzinfo=UTC,
+)
+FRESHNESS: Final = datetime(
+    2026,
+    9,
+    19,
+    1,
+    0,
+    tzinfo=UTC,
+)
+
+
+def _require_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() != timedelta(0):
+        raise ValueError(
+            "timestamp must be timezone-aware UTC"
+        )
+    return value
+
+
+class FetchMetricsInput(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    source_id: SourceId
+    metric: Metric
+    window: Window
+    range_start: datetime
+    range_end: datetime
+
+    _utc_start = field_validator("range_start")(
+        _require_utc
+    )
+    _utc_end = field_validator("range_end")(
+        _require_utc
+    )
+
+    @model_validator(mode="after")
+    def enforce_bounds(self) -> Self:
+        if self.range_end <= self.range_start:
+            raise ValueError(
+                "range_end must be later than range_start"
+            )
+
+        if (
+            self.range_end - self.range_start
+            > timedelta(hours=1)
+        ):
+            raise ValueError(
+                "range must not exceed one hour"
+            )
+
+        if (
+            self.range_start < HORIZON_START
+            or self.range_end > HORIZON_END
+        ):
+            raise ValueError(
+                "range must stay inside the fixture horizon"
+            )
+
+        return self
+
+
+class FetchMetricsOutput(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    source_id: SourceId
+    metric: Metric
+    window: Window
+    range_start: datetime
+    range_end: datetime
+    value: FiniteValue
+    unit: Unit
+    schema_version: Literal["1.0"]
+    freshness_timestamp: datetime
+
+    _utc_start = field_validator("range_start")(
+        _require_utc
+    )
+    _utc_end = field_validator("range_end")(
+        _require_utc
+    )
+    _utc_freshness = field_validator(
+        "freshness_timestamp"
+    )(_require_utc)
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticContract:
+    definition: str
+    unit: Unit
+    horizon_start: datetime
+    horizon_end: datetime
+    freshness_timestamp: datetime
+    minimum_value: float
+    maximum_value: float | None
+
+
+SEMANTIC_REGISTRY: Final[
+    Mapping[
+        tuple[SourceId, Metric],
+        SemanticContract,
+    ]
+] = {
+    (
+        "fixture_primary",
+        "request_count",
+    ): SemanticContract(
+        definition="completed requests",
+        unit="requests",
+        horizon_start=HORIZON_START,
+        horizon_end=HORIZON_END,
+        freshness_timestamp=FRESHNESS,
+        minimum_value=0.0,
+        maximum_value=None,
+    ),
+    (
+        "fixture_secondary",
+        "request_count",
+    ): SemanticContract(
+        definition="accepted requests",
+        unit="requests",
+        horizon_start=HORIZON_START,
+        horizon_end=HORIZON_END,
+        freshness_timestamp=FRESHNESS,
+        minimum_value=0.0,
+        maximum_value=None,
+    ),
+    (
+        "fixture_primary",
+        "error_rate",
+    ): SemanticContract(
+        definition=(
+            "failed requests / completed requests"
+        ),
+        unit="ratio",
+        horizon_start=HORIZON_START,
+        horizon_end=HORIZON_END,
+        freshness_timestamp=FRESHNESS,
+        minimum_value=0.0,
+        maximum_value=1.0,
+    ),
+    (
+        "fixture_secondary",
+        "error_rate",
+    ): SemanticContract(
+        definition=(
+            "server errors / accepted requests"
+        ),
+        unit="ratio",
+        horizon_start=HORIZON_START,
+        horizon_end=HORIZON_END,
+        freshness_timestamp=FRESHNESS,
+        minimum_value=0.0,
+        maximum_value=1.0,
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class FixtureObservation:
+    source_id: SourceId
+    window: Window
+    range_start: datetime
+    range_end: datetime
+    request_count: int
+    error_count: int
+    request_count_unit: Unit
+    error_rate_unit: Unit
+    request_count_definition: str
+    error_rate_definition: str
+    schema_version: str
+    freshness_timestamp: datetime
+
+
+def _observation(
+    source_id: SourceId,
+    window: Window,
+    range_start: datetime,
+    range_end: datetime,
+    request_count: int,
+    error_count: int,
+) -> FixtureObservation:
+    if source_id == "fixture_primary":
+        request_definition = "completed requests"
+        error_definition = (
+            "failed requests / completed requests"
+        )
+    else:
+        request_definition = "accepted requests"
+        error_definition = (
+            "server errors / accepted requests"
+        )
+
+    return FixtureObservation(
+        source_id=source_id,
+        window=window,
+        range_start=range_start,
+        range_end=range_end,
+        request_count=request_count,
+        error_count=error_count,
+        request_count_unit="requests",
+        error_rate_unit="ratio",
+        request_count_definition=request_definition,
+        error_rate_definition=error_definition,
+        schema_version="1.0",
+        freshness_timestamp=FRESHNESS,
+    )
+
+
+_OBSERVATIONS: Final = (
+    _observation(
+        "fixture_primary",
+        "5m",
+        HORIZON_START,
+        HORIZON_START + timedelta(minutes=5),
+        40,
+        0,
+    ),
+    _observation(
+        "fixture_primary",
+        "15m",
+        HORIZON_START,
+        HORIZON_START + timedelta(minutes=15),
+        120,
+        3,
+    ),
+    _observation(
+        "fixture_primary",
+        "5m",
+        HORIZON_START + timedelta(minutes=15),
+        HORIZON_START + timedelta(minutes=20),
+        50,
+        50,
+    ),
+    _observation(
+        "fixture_primary",
+        "15m",
+        HORIZON_START + timedelta(minutes=30),
+        HORIZON_START + timedelta(minutes=45),
+        0,
+        0,
+    ),
+    _observation(
+        "fixture_secondary",
+        "5m",
+        HORIZON_START,
+        HORIZON_START + timedelta(minutes=5),
+        30,
+        1,
+    ),
+    _observation(
+        "fixture_secondary",
+        "15m",
+        HORIZON_START,
+        HORIZON_START + timedelta(minutes=15),
+        80,
+        4,
+    ),
+    _observation(
+        "fixture_secondary",
+        "5m",
+        HORIZON_START + timedelta(minutes=15),
+        HORIZON_START + timedelta(minutes=20),
+        25,
+        0,
+    ),
+    _observation(
+        "fixture_secondary",
+        "15m",
+        HORIZON_START + timedelta(minutes=30),
+        HORIZON_START + timedelta(minutes=45),
+        60,
+        6,
+    ),
+)
+
+FIXTURE_OBSERVATIONS: Final[
+    Mapping[
+        tuple[SourceId, Window, datetime, datetime],
+        FixtureObservation,
+    ]
+] = MappingProxyType({
+    (
+        observation.source_id,
+        observation.window,
+        observation.range_start,
+        observation.range_end,
+    ): observation
+    for observation in _OBSERVATIONS
+})
+
+def validate_output(
+    request: FetchMetricsInput,
+    output: FetchMetricsOutput,
+) -> FetchMetricsOutput:
+    contract = SEMANTIC_REGISTRY[
+        (request.source_id, request.metric)
+    ]
+
+    if (
+        output.source_id != request.source_id
+        or output.metric != request.metric
+        or output.window != request.window
+        or output.range_start != request.range_start
+        or output.range_end != request.range_end
+    ):
+        raise ValueError(
+            "output is not bound to the admitted request"
+        )
+
+    if not (
+        contract.horizon_start
+        <= output.range_start
+        < output.range_end
+        <= contract.horizon_end
+    ):
+        raise ValueError(
+            "output range conflicts with the semantic registry"
+        )
+
+    if output.unit != contract.unit:
+        raise ValueError(
+            "output unit conflicts with the semantic registry"
+        )
+
+    if output.schema_version != "1.0":
+        raise ValueError(
+            "unsupported output schema version"
+        )
+
+    if not math.isfinite(output.value):
+        raise ValueError(
+            "output value must be finite"
+        )
+
+    if (
+        output.value < contract.minimum_value
+        or (
+            contract.maximum_value is not None
+            and output.value > contract.maximum_value
+        )
+    ):
+        raise ValueError(
+            "output value conflicts with the metric domain"
+        )
+
+    if (
+        output.freshness_timestamp
+        != contract.freshness_timestamp
+    ):
+        raise ValueError(
+            "output freshness conflicts with the semantic registry"
+        )
+
+    return output
+
+
+def observation_for_request(
+    request: FetchMetricsInput,
+) -> FixtureObservation:
+    key = (
+        request.source_id,
+        request.window,
+        request.range_start,
+        request.range_end,
+    )
+    try:
+        return FIXTURE_OBSERVATIONS[key]
+    except KeyError as error:
+        raise ValueError(
+            "exact fixture interval is unavailable"
+        ) from error
+
+
+def output_from_observation(
+    request: FetchMetricsInput,
+    observation: FixtureObservation,
+) -> FetchMetricsOutput:
+    contract = SEMANTIC_REGISTRY[
+        (request.source_id, request.metric)
+    ]
+
+    if (
+        observation.source_id != request.source_id
+        or observation.window != request.window
+        or observation.range_start != request.range_start
+        or observation.range_end != request.range_end
+    ):
+        raise ValueError(
+            "fixture observation is not bound to the admitted request"
+        )
+
+    if (
+        observation.request_count < 0
+        or observation.error_count < 0
+        or observation.error_count
+        > observation.request_count
+    ):
+        raise ValueError(
+            "fixture counts violate the admitted metric domain"
+        )
+
+    if request.metric == "request_count":
+        value = float(observation.request_count)
+        unit = observation.request_count_unit
+        definition = observation.request_count_definition
+    else:
+        if observation.request_count == 0:
+            raise ValueError(
+                "error_rate requires a nonzero request count"
+            )
+        value = (
+            observation.error_count
+            / observation.request_count
+        )
+        unit = observation.error_rate_unit
+        definition = observation.error_rate_definition
+
+    if (
+        unit != contract.unit
+        or definition != contract.definition
+    ):
+        raise ValueError(
+            "fixture semantics conflict with the registry"
+        )
+
+    if observation.schema_version != "1.0":
+        raise ValueError(
+            "fixture schema conflicts with the registry"
+        )
+
+    if (
+        observation.freshness_timestamp
+        != contract.freshness_timestamp
+    ):
+        raise ValueError(
+            "fixture freshness conflicts with the registry"
+        )
+
+    output = FetchMetricsOutput(
+        source_id=observation.source_id,
+        metric=request.metric,
+        window=observation.window,
+        range_start=observation.range_start,
+        range_end=observation.range_end,
+        value=value,
+        unit=unit,
+        schema_version=observation.schema_version,
+        freshness_timestamp=(
+            observation.freshness_timestamp
+        ),
+    )
+
+    return validate_output(request, output)
+
+server = MCPServer(
+    "typed-metrics",
+    version="2.2.0",
+)
+
+
+@server.tool(
+    name="fetch_metrics",
+    structured_output=True,
+)
+async def fetch_metrics(
+    request: FetchMetricsInput,
+) -> FetchMetricsOutput:
+    """Return one bounded local metric after validation."""
+    observation = observation_for_request(request)
+
+    return output_from_observation(
+        request,
+        observation,
+    )
+

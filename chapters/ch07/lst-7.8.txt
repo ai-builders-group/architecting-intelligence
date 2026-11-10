@@ -1,0 +1,66 @@
+// src/ui/components/ProposalDiff.tsx
+interface ProposalDiffProps {
+  proposal: Proposal;
+  onApprove: () => void;
+  onReject: () => void;
+}
+
+export function ProposalDiff({ proposal, onApprove, onReject }: ProposalDiffProps) {
+  return (
+    <div className="proposal-container">
+      <header>
+        <h2>Proposal: {proposal.action}</h2>
+        <span className={`risk-badge risk-${proposal.risk_level}`}>
+          {proposal.risk_level.toUpperCase()} RISK
+        </span>
+      </header>
+      
+      <section className="rationale">
+        <h3>Rationale</h3>
+        <p>{proposal.rationale}</p>
+      </section>
+      
+      <section className="diff-view">
+        <h3>State Changes</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Before</th>
+              <th>After</th>
+              <th>Impact</th>
+            </tr>
+          </thead>
+          <tbody>
+            {proposal.state_changes.map((change, idx) => (
+              <tr key={idx}>
+                <td><code>{change.field}</code></td>
+                <td className="before">{JSON.stringify(change.before)}</td>
+                <td className="after">{JSON.stringify(change.after)}</td>
+                <td>{change.impact}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+      
+      <section className="evidence">
+        <h3>Evidence ({proposal.evidence.length} sources)</h3>
+        <ul>
+          {proposal.evidence.map((ev, idx) => (
+            <li key={idx}>
+              <strong>{ev.source}</strong> (score: {ev.relevance_score.toFixed(2)})
+              <p>{ev.excerpt}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
+      
+      <footer className="actions">
+        <button onClick={onReject} className="btn-reject">Reject</button>
+        <button onClick={onApprove} className="btn-approve">Approve</button>
+      </footer>
+    </div>
+  );
+}
+

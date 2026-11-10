@@ -1,0 +1,475 @@
+# chapters/ch04/lst-4.5.txt
+from typing import Annotated, Optional
+from pydantic import BaseModel, Field, field_validator
+from enum import IntEnum
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from datetime import datetime
+import structlog
+
+logger = structlog.get_logger()
+
+class TierLevel(IntEnum):
+    """Cognitive Supply Chain tiers."""
+    REFLEX = 0
+    PROCESSOR = 1
+    GENERALIST = 2
+    REASONER = 3
+
+class TriageResult(BaseModel):
+    """
+    The classifier's output contract.
+    This schema is the basis for all downstream routing decisions and
+    economic calculations. It must be strictly typed and logged for
+    every request to enable continuous calibration monitoring.
+    """
+    predicted_tier: TierLevel = Field(
+        ..., 
+        description="The most likely tier required."
+    )
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
+        ..., 
+        description="Calibrated confidence score (post-temperature scaling)."
+    )
+    tier_probabilities: dict[str, float] = Field(
+        ...,
+        description="Full softmax distribution over all tiers for uncertainty quantification."
+    )
+    reasoning: str = Field(
+        default="", 
+        description="Optional chain-of-thought explanation for transparency and debugging."
+    )
+    embedding: Optional[list[float]] = Field(
+        default=None,
+        description="The [CLS] embedding for offline analysis (768-dim). Null in production to reduce log volume."
+    )
+    classifier_version: str = Field(
+        default="v1.0.0",
+        description="Model version for tracking calibration drift across deployments."
+    )
+    timestamp: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="Decision timestamp for temporal analysis."
+    )
+    temperature_applied: Annotated[float, Field(gt=0.0)] = Field(
+        default=1.0,
+        description="The post-hoc temperature scaling factor used (1.0 = no correction)."
+    )
+    
+    @field_validator('confidence')
+    @classmethod
+    def enforce_calibration_bounds(cls, v: float) -> float:
+        """
+        Clip extreme confidences to prevent over-confidence artifacts.
+        Neural networks often output P > 0.999 due to softmax saturation,
+        which breaks the NRB calculation by understating failure risk.
+        """
+        if v > 0.99:
+            logger.warning("classifier.overconfidence_clipped", raw=v)
+            return 0.99
+        if v < 0.25:  # Below random chance for 4 classes
+            logger.warning("classifier.underconfidence_flagged", raw=v)
+        return v
+    
+    @field_validator('tier_probabilities')
+    @classmethod
+    def validate_probability_sum(cls, v: dict[str, float]) -> dict[str, float]:
+        """Ensure the probability distribution sums to 1.0 (within numerical tolerance)."""
+        total = sum(v.values())
+        if not (0.99 <= total <= 1.01):
+            raise ValueError(f"Tier probabilities must sum to 1.0, got {total}")
+        return v
+
+class ComplexityClassifier:
+    """
+    Illustrative classifier contract; the encoder and trained head are not supplied.
+    
+    This class encapsulates a Sentence-BERT encoder with a learned
+    classification head, trained via knowledge distillation from a
+    Tier 3 teacher model. It includes:
+    - Post-hoc temperature scaling for calibration
+    - Continuous ECE monitoring for drift detection
+    - Batch prediction support for high-throughput scenarios
+    - A/B testing infrastructure for gradual rollout
+    """
+    
+    def __init__(
+        self, 
+        model_path: str = "sentence-transformers/all-MiniLM-L6-v2",
+        classifier_head_path: str = "models/tier_classifier_head.pkl",
+        temperature: float = 1.0,
+        enable_telemetry: bool = True,
+        version: str = "v1.0.0"
+    ):
+        """
+        Args:
+            model_path: HuggingFace model ID or local path for encoder.
+            classifier_head_path: Path to the trained MLP head (pickled PyTorch state dict).
+            temperature: Post-hoc temperature scaling parameter (1.0 = no scaling).
+            enable_telemetry: Whether to log predictions for calibration monitoring.
+            version: Semantic version for tracking model deployments.
+        """
+        # Load the encoder (typically ~90MB, loads in <2 seconds)
+        self.encoder = SentenceTransformer(model_path)
+        
+        # Load the classification head
+        # In production, this would be a saved PyTorch/TensorFlow model
+        # For this example, we simulate with a mock
+        self.classifier_head = self._load_classification_head(classifier_head_path)
+        
+        self.temperature = temperature
+        self.enable_telemetry = enable_telemetry
+        self.version = version
+        
+        # Calibration monitoring buffer (stores recent predictions for ECE calculation)
+        # In production, this would be backed by a time-series database (InfluxDB, Prometheus)
+        self._calibration_buffer: list[tuple[float, bool]] = []
+        
+        # Exponential moving average for online ECE tracking
+        self._ece_ema = 0.0
+        self._ema_alpha = 0.01  # Smoothing factor
+        
+        logger.info(
+            "complexity_classifier.initialized",
+            encoder=model_path,
+            temperature=self.temperature,
+            version=self.version
+        )
+    
+    def classify(self, prompt: str, include_embedding: bool = False) -> TriageResult:
+        """
+        Classify the cognitive complexity of a prompt.
+        
+        Args:
+            prompt: The user's raw input (post-firewall sanitization).
+            include_embedding: Whether to include the raw embedding in the result (for debugging).
+        
+        Returns:
+            TriageResult with predicted tier and calibrated confidence.
+        """
+        # Step 1: Extract [CLS] embedding from Sentence-BERT
+        # This is a 768-dimensional dense vector capturing semantic content
+        embedding = self.encoder.encode(
+            prompt, 
+            convert_to_numpy=True,
+            show_progress_bar=False,
+            normalize_embeddings=True  # L2 normalization for stability
+        )
+        
+        # Step 2: Forward pass through classification head
+        # Returns raw logits (unbounded scores, one per tier)
+        logits = self.classifier_head(embedding)
+        
+        # Step 3: Apply temperature scaling for calibration
+        scaled_logits = logits / self.temperature
+        
+        # Step 4: Softmax to get probability distribution
+        exp_logits = np.exp(
+            scaled_logits - np.max(scaled_logits)
+        )  # Numerical stability
+        probabilities = exp_logits / exp_logits.sum()
+        
+        # Step 5: Extract prediction and confidence
+        predicted_tier_idx = int(np.argmax(probabilities))
+        predicted_tier = TierLevel(predicted_tier_idx)
+        confidence = float(probabilities[predicted_tier_idx])
+        
+        # Step 6: Build full probability dictionary
+        tier_probs = {
+            f"TIER_{i}": float(probabilities[i])
+            for i in range(4)
+        }
+        
+        # Step 7: Generate reasoning (optional, for transparency)
+        reasoning = self._generate_reasoning(prompt, predicted_tier, probabilities)
+        
+        result = TriageResult(
+            predicted_tier=predicted_tier,
+            confidence=confidence,
+            tier_probabilities=tier_probs,
+            reasoning=reasoning,
+            embedding=embedding.tolist() if include_embedding else None,
+            classifier_version=self.version,
+            temperature_applied=self.temperature
+        )
+        
+        # Telemetry logging
+        if self.enable_telemetry:
+            logger.info(
+                "classifier.prediction",
+                tier=predicted_tier.name,
+                confidence=f"{confidence:.3f}",
+                probs={k: f"{v:.3f}" for k, v in tier_probs.items()},
+                version=self.version
+            )
+        
+        return result
+    
+    def classify_batch(self, prompts: list[str]) -> list[TriageResult]:
+        """
+        Batch prediction for high-throughput scenarios.
+        This is 2-5× faster than sequential classify() calls due to:
+        - Parallelized embedding extraction
+        - Vectorized softmax computation
+        
+        Args:
+            prompts: List of input prompts.
+        
+        Returns:
+            List of TriageResults in the same order as inputs.
+        """
+        # Batch encode all prompts (parallelized by Sentence-BERT)
+        embeddings = self.encoder.encode(
+            prompts,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+            normalize_embeddings=True,
+            batch_size=32  # Tune based on available memory
+        )
+        
+        # Vectorized forward pass
+        logits_batch = np.array([self.classifier_head(emb) for emb in embeddings])
+        scaled_logits = logits_batch / self.temperature
+        
+        # Vectorized softmax
+        exp_logits = np.exp(scaled_logits - np.max(scaled_logits, axis=1, keepdims=True))
+        probabilities_batch = exp_logits / exp_logits.sum(axis=1, keepdims=True)
+        
+        # Convert to TriageResults
+        results = []
+        for i, (prompt, probs) in enumerate(zip(prompts, probabilities_batch)):
+            predicted_tier_idx = int(np.argmax(probs))
+            predicted_tier = TierLevel(predicted_tier_idx)
+            confidence = float(probs[predicted_tier_idx])
+            
+            tier_probs = {f"TIER_{j}": float(probs[j]) for j in range(4)}
+            reasoning = self._generate_reasoning(prompt, predicted_tier, probs)
+            
+            results.append(TriageResult(
+                predicted_tier=predicted_tier,
+                confidence=confidence,
+                tier_probabilities=tier_probs,
+                reasoning=reasoning,
+                classifier_version=self.version,
+                temperature_applied=self.temperature
+            ))
+        
+        if self.enable_telemetry:
+            logger.info(
+                "classifier.batch_prediction",
+                batch_size=len(prompts),
+                version=self.version
+            )
+        
+        return results
+    
+    def report_outcome(self, result: TriageResult, judge_agrees: bool) -> None:
+        """
+        Record the actual outcome of a routing decision.
+        This enables continuous calibration monitoring and drift detection.
+        
+        Args:
+            result: The original TriageResult.
+            judge_agrees: Whether the judge agrees the selected tier completed the task.
+        """
+        self._calibration_buffer.append((result.confidence, judge_agrees))
+        
+        # Update EMA for real-time drift detection
+        empirical_accuracy = 1.0 if judge_agrees else 0.0
+        error = abs(result.confidence - empirical_accuracy)
+        self._ece_ema = self._ema_alpha * error + (1 - self._ema_alpha) * self._ece_ema
+        
+        # Trigger calibration check every 1000 outcomes
+        if len(self._calibration_buffer) >= 1000:
+            ece = self._compute_ece()
+            sample_size = len(self._calibration_buffer)
+            self._calibration_buffer.clear()
+            logger.info(
+                "classifier.calibration_check",
+                ece=f"{ece:.4f}",
+                ece_ema=f"{self._ece_ema:.4f}",
+                sample_size=sample_size,
+                version=self.version
+            )
+            
+            if ece > 0.10:
+                logger.error(
+                    "classifier.miscalibration_detected",
+                    ece=ece,
+                    threshold=0.10,
+                    recommendation="Trigger temperature re-tuning or model retraining.",
+                    version=self.version
+                )
+
+    
+    def _load_classification_head(self, path: str):
+        """
+        Load the trained MLP classification head.
+        In production, this would deserialize a PyTorch model:
+        
+        A real implementation must load a receipt-pinned trained head and validate its artifact hash.
+        
+        For this example, we return a mock callable with realistic behavior.
+        """
+        def mock_head(embedding: np.ndarray) -> np.ndarray:
+            """
+            Simulate learned weights with plausible decision boundaries.
+            In production, this would be the actual trained neural network.
+            """
+            # Simulate complexity signals from embedding features
+            # Real implementation: return model(torch.from_numpy(embedding))
+            
+            # Mock feature: average embedding magnitude (proxy for semantic density)
+            complexity_signal = np.linalg.norm(embedding) / 30.0
+            
+            # Mock feature: embedding entropy (proxy for ambiguity)
+            embedding_normalized = np.abs(embedding) / (np.sum(np.abs(embedding)) + 1e-10)
+            entropy = -np.sum(embedding_normalized * np.log(embedding_normalized + 1e-10))
+            
+            # Combine signals with learned weights (mock)
+            if complexity_signal < 0.8 and entropy < 4.0:
+                return np.array([0.1, 2.5, 0.5, 0.2])  # Likely Tier 1
+            elif complexity_signal < 1.2 or entropy < 5.0:
+                return np.array([0.1, 0.8, 2.0, 0.9])  # Likely Tier 2
+            else:
+                return np.array([0.1, 0.3, 1.0, 2.5])  # Likely Tier 3
+        
+        return mock_head
+    
+    def _generate_reasoning(
+        self, 
+        prompt: str, 
+        tier: TierLevel, 
+        probabilities: np.ndarray
+    ) -> str:
+        """
+        Generate a brief explanation of the classification decision.
+        This is useful for debugging, user transparency, and building trust.
+        """
+        # Calculate Shannon entropy of the probability distribution
+        entropy = -np.sum(probabilities * np.log(probabilities + 1e-10))
+        
+        # Interpret entropy
+        if entropy > 1.2:
+            uncertainty_note = " (High uncertainty: consider fallback to Reasoner)"
+        elif entropy > 0.8:
+            uncertainty_note = " (Moderate uncertainty)"
+        else:
+            uncertainty_note = " (High confidence)"
+        
+        # Extract key features (mock implementation)
+        word_count = len(prompt.split())
+        has_code = '```' in prompt or 'def ' in prompt or 'class ' in prompt
+        has_math = any(sym in prompt for sym in ['∫', '∑', '∂', 'equation'])
+        
+        features = []
+        if word_count > 100:
+            features.append(f"long input ({word_count} words)")
+        if has_code:
+            features.append("code detected")
+        if has_math:
+            features.append("mathematical notation")
+        
+        feature_str = ", ".join(features) if features else "standard query"
+        
+        return (
+            f"Classified as {tier.name} based on semantic analysis ({feature_str}). "
+            f"Probability distribution: {probabilities[tier.value]:.1%}{uncertainty_note}."
+        )
+    
+    def _compute_ece(self, num_bins: int = 10) -> float:
+        """
+        Compute Expected Calibration Error from the buffered outcomes.
+        
+        Returns:
+            ECE value in [0, 1]. Lower is better; <0.05 is excellent.
+        """
+        if not self._calibration_buffer:
+            return 0.0
+        
+        # Create bins by confidence score
+        bins = [[] for _ in range(num_bins)]
+        for confidence, success in self._calibration_buffer:
+            bin_idx = min(int(confidence * num_bins), num_bins - 1)
+            bins[bin_idx].append(success)
+        
+        # Compute ECE
+        ece = 0.0
+        total = len(self._calibration_buffer)
+        
+        for bin_idx, outcomes in enumerate(bins):
+            if not outcomes:
+                continue
+            
+            predicted_conf = (bin_idx + 0.5) / num_bins
+            empirical_acc = sum(outcomes) / len(outcomes)
+            bin_weight = len(outcomes) / total
+            
+            ece += bin_weight * abs(predicted_conf - empirical_acc)
+        
+        return ece
+    
+    def update_temperature(self, new_temperature: float) -> None:
+        """
+        Update the temperature scaling parameter.
+        This is typically called by an automated calibration job that
+        runs weekly on a validation set.
+        
+        Args:
+            new_temperature: The new temperature value (typically 1.0-3.0).
+        """
+        if new_temperature <= 0:
+            raise ValueError(f"Temperature must be positive, got {new_temperature}")
+        
+        old_temp = self.temperature
+        self.temperature = new_temperature
+        
+        logger.info(
+            "classifier.temperature_updated",
+            old=old_temp,
+            new=new_temperature,
+            version=self.version
+        )
+
+# Example: A/B Testing Infrastructure for Gradual Rollout
+class ABTestingRouter:
+    """
+    Wrapper for gradual rollout of new classifier versions.
+    Uses consistent hashing to ensure the same user always sees the same version.
+    """
+    
+    def __init__(
+        self,
+        classifier_a: ComplexityClassifier,
+        classifier_b: ComplexityClassifier,
+        traffic_split: float = 0.5
+    ):
+        """
+        Args:
+            classifier_a: The control classifier (current production version).
+            classifier_b: The experimental classifier (new version being tested).
+            traffic_split: Fraction of traffic routed to classifier_b (0.0-1.0).
+        """
+        self.classifier_a = classifier_a
+        self.classifier_b = classifier_b
+        self.traffic_split = traffic_split
+    
+    def classify(self, prompt: str, user_id: str) -> TriageResult:
+        """
+        Route to A or B based on consistent hashing of user_id.
+        This ensures the same user always sees the same version for consistency.
+        """
+        import hashlib
+        
+        # Consistent hash
+        hash_value = int(hashlib.md5(user_id.encode()).hexdigest(), 16)
+        bucket = (hash_value % 100) / 100.0
+        
+        if bucket < self.traffic_split:
+            result = self.classifier_b.classify(prompt)
+            result.classifier_version += "-experiment"
+        else:
+            result = self.classifier_a.classify(prompt)
+            result.classifier_version += "-control"
+        
+        return result

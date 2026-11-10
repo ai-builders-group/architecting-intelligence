@@ -1,0 +1,219 @@
+# chapters/ch04/lst-4.7.txt
+import asyncio
+from typing import Annotated, Optional
+from pydantic import BaseModel, Field
+from datetime import datetime
+import structlog
+
+from .schemas import TierLevel, AgentOutput
+from .clients import ModelClient
+from .telemetry import TelemetryEmitter
+
+logger = structlog.get_logger()
+
+class SpeculativeConfig(BaseModel):
+    """Configuration for speculative execution behavior."""
+    gray_zone_lower: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
+        0.60,
+        description="Minimum confidence to attempt speculative execution."
+    )
+    gray_zone_upper: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
+        0.85,
+        description="Maximum confidence (above this, use predicted tier only)."
+    )
+    fast_tier_timeout_ms: int = Field(
+        1500,
+        description="How long to wait for fast tier before accepting slow tier result."
+    )
+
+class SpeculativeExecutor:
+    """
+    Implements speculative execution to minimize user-perceived latency
+    in the presence of routing uncertainty.
+    """
+    
+    def __init__(
+        self,
+        clients: dict[TierLevel, ModelClient],
+        config: SpeculativeConfig = SpeculativeConfig(),
+        telemetry: Optional[TelemetryEmitter] = None
+    ):
+        """
+        Args:
+            clients: Dictionary mapping tiers to their model clients.
+            config: Speculative execution configuration.
+            telemetry: Optional telemetry emitter.
+        """
+        self.clients = clients
+        self.config = config
+        self.telemetry = telemetry or TelemetryEmitter()
+    
+    async def execute_speculative(
+        self,
+        prompt: str,
+        predicted_tier: TierLevel,
+        confidence: float,
+        tenant_id: str,
+        request_id: str,
+        side_effect_free: bool = False
+    ) -> tuple[AgentOutput, dict]:
+        """
+        Execute with speculative parallelism if confidence is in gray zone.
+        
+        Args:
+            prompt: The user's input.
+            predicted_tier: The router's predicted tier.
+            confidence: The router's confidence score.
+            tenant_id: Tenant that owns the request; part of the idempotency key.
+            request_id: Unique request identifier.
+            side_effect_free: True only if the call may safely run twice;
+                when False, no speculative task is started.
+        
+        Returns:
+            Tuple of (output, metadata) with execution details.
+        """
+        start_time = datetime.utcnow()
+        metadata = {
+            "request_id": request_id,
+            "predicted_tier": predicted_tier.name,
+            "confidence": confidence,
+            "strategy": "unknown"
+        }
+        
+        gray_zone_lower = self.config.gray_zone_lower
+        gray_zone_upper = self.config.gray_zone_upper
+        fast_tier_timeout_ms = self.config.fast_tier_timeout_ms
+        
+        # Check if confidence is in gray zone
+        in_gray_zone = gray_zone_lower <= confidence < gray_zone_upper
+        timeout_seconds = fast_tier_timeout_ms / 1000
+        
+        if not in_gray_zone or not side_effect_free:
+            # High confidence: use predicted tier only
+            metadata["strategy"] = "direct"
+            result = await self._execute_single(
+                predicted_tier, prompt, tenant_id, request_id, attempt=1)
+            metadata["latency_ms"] = (datetime.utcnow() - start_time).total_seconds() * 1000
+            metadata["tier_executed"] = predicted_tier.name
+            
+            self.telemetry.emit(
+                event="speculative_execution",
+                data=metadata,
+                timestamp=start_time
+            )
+            
+            return result, metadata
+        
+        # Gray zone: launch both tiers in parallel
+        metadata["strategy"] = "speculative_parallel"
+        logger.info(
+            "speculative.parallel_launch",
+            low_tier=predicted_tier.name,
+            high_tier=TierLevel.REASONER.name,
+            confidence=confidence,
+            request_id=request_id
+        )
+        
+        # Create async tasks
+        low_tier_task = asyncio.create_task(self._execute_single(
+            predicted_tier, prompt, tenant_id, request_id, attempt=1))
+        high_tier_task = asyncio.create_task(self._execute_single(
+            TierLevel.REASONER, prompt, tenant_id, request_id, attempt=1))
+        
+        try:
+            try:
+                # Wait for low tier with timeout
+
+                done, pending = await asyncio.wait(
+                    [low_tier_task], timeout=timeout_seconds)
+            
+                if low_tier_task in done:
+                    result = low_tier_task.result()
+                
+                    # Check if result is valid
+                    if result.is_valid:
+                        # Success! Cancel the high tier task
+                        high_tier_task.cancel()
+                    
+                        metadata["outcome"] = "low_tier_success"
+                        metadata["tier_executed"] = predicted_tier.name
+                        metadata["tier_cancelled"] = TierLevel.REASONER.name
+                        metadata["tokens_saved"] = "estimated_high_tier_cost"
+                    
+                        logger.info(
+                            "speculative.low_tier_win",
+                            tier=predicted_tier.name,
+                            request_id=request_id
+                        )
+                    
+                        latency_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+                        metadata["latency_ms"] = latency_ms
+                    
+                        self.telemetry.emit(
+                            event="speculative_execution",
+                            data=metadata,
+                            timestamp=start_time
+                        )
+                    
+                        return result, metadata
+                    else:
+                        logger.warning(
+                            "speculative.low_tier_invalid",
+                            tier=predicted_tier.name,
+                            request_id=request_id
+                        )
+            
+                if low_tier_task in pending:
+                    low_tier_task.cancel()
+            
+                # Low tier failed or timeout: wait for high tier
+                metadata["outcome"] = "fallback_to_high_tier"
+                metadata["fallback_reason"] = "low_tier_timeout_or_invalid"
+            
+            except Exception as e:
+                logger.error(
+                    "speculative.low_tier_exception",
+                    tier=predicted_tier.name,
+                    error=str(e),
+                    request_id=request_id
+                )
+                metadata["outcome"] = "exception_fallback"
+                metadata["error"] = str(e)
+        
+            # Wait for high tier result
+            result = await high_tier_task
+            metadata["tier_executed"] = TierLevel.REASONER.name
+            metadata["latency_ms"] = (datetime.utcnow() - start_time).total_seconds() * 1000
+        
+            logger.info(
+                "speculative.high_tier_win",
+                tier=TierLevel.REASONER.name,
+                request_id=request_id
+            )
+        
+            self.telemetry.emit(
+                event="speculative_execution",
+                data=metadata,
+                timestamp=start_time
+            )
+        
+            return result, metadata
+        finally:
+            for task in (low_tier_task, high_tier_task):
+                task.cancel()
+            await asyncio.gather(
+                low_tier_task, high_tier_task, return_exceptions=True)
+    
+    async def _execute_single(
+        self,
+        tier: TierLevel,
+        prompt: str,
+        tenant_id: str,
+        request_id: str,
+        attempt: int = 1
+    ) -> AgentOutput:
+        """Execute inference on a single tier."""
+        client = self.clients[tier]
+        return await client.run(
+            prompt, request_id=request_id,
+            idempotency_key=f"{tenant_id}:{request_id}:{tier.name}:{attempt}")

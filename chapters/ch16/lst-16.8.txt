@@ -1,0 +1,952 @@
+from __future__ import annotations
+
+import datetime
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Annotated, Generic, Protocol, TypeAlias, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field
+
+Digest: TypeAlias = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+Identifier: TypeAlias = Annotated[str, Field(min_length=1)]
+T = TypeVar("T")
+
+
+class StrictRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class Lifecycle(StrEnum):
+    ACTIVE = "active"
+    WITHDRAWN = "withdrawn"
+    RETIRED = "retired"
+
+
+class SelectionKind(StrEnum):
+    BRANCH = "branch"
+    DEFAULT = "default"
+    FALLBACK = "fallback"
+
+
+class CacheOutcome(StrEnum):
+    VERIFIED_HIT = "verified_hit"
+    MISS = "miss"
+    STALE_GENERATION = "stale_generation"
+    CORRUPT_ENTRY = "corrupt_entry"
+
+
+class RejectionCode(StrEnum):
+    INCOMPATIBLE_MANIFEST = "incompatible_manifest"
+    AUTHORITY_NOT_YET_ISSUED = "authority_not_yet_issued"
+    AUTHORITY_EXPIRED = "authority_expired"
+    ROLLBACK_REJECTED = "rollback_rejected"
+    AUTHORITY_FORK = "authority_fork"
+    HIGH_WATER_UNAVAILABLE = "high_water_unavailable"
+    VERIFIER_FAILED = "verifier_failed"
+    LIFECYCLE_NOT_ACTIVE = "lifecycle_not_active"
+    EVIDENCE_UNAVAILABLE = "evidence_unavailable"
+    EVIDENCE_REVOKED = "evidence_revoked"
+    EVIDENCE_EXPIRED = "evidence_expired"
+    EVIDENCE_PACKET_MISMATCH = "evidence_packet_mismatch"
+    ARTIFACT_IO_FAILED = "artifact_io_failed"
+    ARTIFACT_DIGEST_MISMATCH = "artifact_digest_mismatch"
+    POST_STAGE_MODULE_MAP_DRIFT = "post_stage_module_map_drift"
+    RESIDENCY_UNAVAILABLE = "residency_unavailable"
+    SELECTION_WAL_UNAVAILABLE = "selection_wal_unavailable"
+    REGISTRY_DRIFT = "registry_drift"
+    HANDLE_DRIFT = "handle_drift"
+    ATTACHMENT_FAILED = "attachment_failed"
+    OBSERVED_BASE_MISMATCH = "observed_base_mismatch"
+    RUNTIME_ENVELOPE_MISMATCH = "runtime_envelope_mismatch"
+    ACTIVATION_RECEIPT_FAILED = "activation_receipt_failed"
+    ACTIVATION_RECEIPT_UNKNOWN = "activation_receipt_unknown"
+    ACTIVATION_RECEIPT_MISMATCH = "activation_receipt_mismatch"
+    PUBLICATION_FAILED = "publication_failed"
+    FENCE_UNCONFIRMED = "fence_unconfirmed"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    RESPONSE_RECEIPT_FAILED = "response_receipt_failed"
+
+
+class EvidenceReference(StrictRecord):
+    evidence_id: Identifier
+    evidence_digest: Digest
+
+
+class RevisionScope(StrictRecord):
+    base_lineage_id: Identifier
+    adapter_id: Identifier
+
+
+class RegistryBinding(StrictRecord):
+    base_lineage_id: Identifier
+    adapter_id: Identifier
+    manifest_digest: Digest
+    compatibility_condition_digest: Digest
+    expected_runtime_envelope_digest: Digest
+    evidence_packet_digest: Digest
+    base_digest: Digest
+    module_map_digest: Digest
+    artifact_digest: Digest
+    lifecycle: Lifecycle
+    evidence_references: tuple[EvidenceReference, ...]
+    revision: int = Field(ge=0)
+    snapshot_digest: Digest
+    issued_at: datetime.datetime
+    authority_deadline: datetime.datetime
+
+    @property
+    def scope(self) -> RevisionScope:
+        return RevisionScope(
+            base_lineage_id=self.base_lineage_id,
+            adapter_id=self.adapter_id,
+        )
+
+
+class AdapterManifest(StrictRecord):
+    base_lineage_id: Identifier
+    adapter_id: Identifier
+    manifest_digest: Digest
+    compatibility_condition_digest: Digest
+    expected_runtime_envelope_digest: Digest
+    base_digest: Digest
+    declared_module_map_digest: Digest
+    declared_artifact_digest: Digest
+    evidence_references: tuple[EvidenceReference, ...]
+
+    @property
+    def scope(self) -> RevisionScope:
+        return RevisionScope(
+            base_lineage_id=self.base_lineage_id,
+            adapter_id=self.adapter_id,
+        )
+
+
+class EvidenceState(StrictRecord):
+    ledger_revision: int = Field(ge=0)
+    ledger_digest: Digest
+    evidence_packet_digest: Digest
+    subject_manifest_digest: Digest
+    compatibility_condition_digest: Digest
+    expires_at: datetime.datetime
+    active: bool
+
+
+class StageObservation(StrictRecord):
+    retained_handle_id: Identifier
+    artifact_digest: Digest
+    module_map_digest: Digest
+
+
+class HighWaterProposal(StrictRecord):
+    revision: int = Field(ge=0)
+    snapshot_digest: Digest
+
+
+class HighWaterDecision(StrEnum):
+    RECORDED = "recorded"
+    STALE = "stale"
+    FORK = "fork"
+
+
+class RouteAttemptContext(StrictRecord):
+    correlation_id: Identifier
+    route_policy_digest: Digest
+    route_input_digest: Digest
+    selected_adapter_id: Identifier
+    selection_kind: SelectionKind
+    attempt_ordinal: int = Field(ge=0)
+    prior_failure_code: RejectionCode | None
+    cache_outcome: CacheOutcome
+    monotonic_deadline: float = Field(gt=0)
+    remaining_budget: float = Field(ge=0)
+    idempotency_key: Identifier
+    response_receipt_id: Identifier
+
+
+class SelectionReceipt(StrictRecord):
+    receipt_id: Identifier
+    context: RouteAttemptContext
+    registry_snapshot_digest: Digest
+
+
+class PreparedGeneration(StrictRecord):
+    generation_id: Identifier
+    observed_base_digest: Digest
+    runtime_envelope_digest: Digest
+    worker_epoch: int = Field(ge=0)
+    device_epoch: int = Field(ge=0)
+
+
+class RealizedActivationReceipt(StrictRecord):
+    receipt_id: Identifier
+    context: RouteAttemptContext
+    generation_id: Identifier
+    worker_epoch: int = Field(ge=0)
+    registry_snapshot_digest: Digest
+    evidence_ledger_digest: Digest
+    evidence_packet_digest: Digest
+    record_checksum: Digest
+
+
+class PublishedGeneration(StrictRecord):
+    generation_id: Identifier
+    activation_receipt_id: Identifier
+    worker_epoch: int = Field(ge=0)
+    context: RouteAttemptContext
+
+
+class PublicationRecord(StrictRecord):
+    generation_id: Identifier
+    activation_receipt_id: Identifier
+    worker_epoch: int = Field(ge=0)
+    context: RouteAttemptContext
+
+
+class CleanupOutcome(StrictRecord):
+    fence_required: bool
+    fence_confirmed: bool | None
+    worker_epoch_poisoned: bool
+    reservation_released: bool
+    artifact_discarded: bool
+    errors: tuple[str, ...] = ()
+
+
+class TerminalAttemptReceipt(StrictRecord):
+    receipt_id: Identifier
+    context: RouteAttemptContext
+    code: RejectionCode
+    cause_code: RejectionCode | None
+    cleanup: CleanupOutcome | None
+
+
+class ResponseReceipt(StrictRecord):
+    receipt_id: Identifier
+    context: RouteAttemptContext
+    activation_receipt_id: Identifier
+    generation_id: Identifier
+
+
+@dataclass(frozen=True)
+class Accepted(Generic[T]):
+    value: T
+
+
+@dataclass(frozen=True)
+class Rejected:
+    code: RejectionCode
+    context: RouteAttemptContext
+    cause_code: RejectionCode | None = None
+    terminal_receipt: TerminalAttemptReceipt | None = None
+    cleanup: CleanupOutcome | None = None
+
+
+@dataclass(frozen=True)
+class AdmissionAccepted:
+    manifest: AdapterManifest
+    binding: RegistryBinding
+    evidence_at_admission: EvidenceState
+    artifact: RetainedArtifact
+    observation: StageObservation
+    reservation: Reservation
+    selection_receipt: SelectionReceipt
+
+
+@dataclass(frozen=True)
+class RealizationPermit:
+    context: RouteAttemptContext
+    binding: RegistryBinding
+    evidence: EvidenceState
+    observation: StageObservation
+    worker_epoch: int
+
+
+@dataclass(frozen=True)
+class Realized:
+    published: PublishedGeneration
+    activation_receipt: RealizedActivationReceipt
+    selection_receipt: SelectionReceipt
+
+
+class VerifierFault(Exception):
+    pass
+
+
+class HighWaterFault(Exception):
+    pass
+
+
+class EvidenceFault(Exception):
+    pass
+
+
+class ArtifactFault(Exception):
+    pass
+
+
+class ResidencyFault(Exception):
+    pass
+
+
+class WALFault(Exception):
+    pass
+
+
+class AcknowledgementTimeout(Exception):
+    pass
+
+
+class RuntimeFault(Exception):
+    pass
+
+
+class AuthenticatedRegistrySnapshot(Protocol):
+    @property
+    def binding(self) -> RegistryBinding: ...
+
+
+class HighWaterStore(Protocol):
+    def compare_and_persist(
+        self,
+        scope: RevisionScope,
+        proposal: HighWaterProposal,
+    ) -> HighWaterDecision: ...
+
+
+class RegistryVerifier(Protocol):
+    def confirm(
+        self,
+        snapshot: AuthenticatedRegistrySnapshot,
+        *,
+        at: datetime.datetime,
+    ) -> AuthenticatedRegistrySnapshot: ...
+
+    def revalidate(
+        self,
+        admitted: AdmissionAccepted,
+        *,
+        at: datetime.datetime,
+    ) -> AuthenticatedRegistrySnapshot: ...
+
+
+class EvidenceLedger(Protocol):
+    def validate(
+        self,
+        references: tuple[EvidenceReference, ...],
+    ) -> EvidenceState: ...
+
+    def revalidate(
+        self,
+        references: tuple[EvidenceReference, ...],
+        prior: EvidenceState,
+    ) -> EvidenceState: ...
+
+
+class RetainedArtifact(Protocol):
+    def observation(self) -> StageObservation: ...
+
+    def discard(self) -> None: ...
+
+
+class ArtifactStager(Protocol):
+    def stage(
+        self,
+        manifest: AdapterManifest,
+        binding: RegistryBinding,
+    ) -> RetainedArtifact: ...
+
+
+class Reservation(Protocol):
+    def release(self) -> None: ...
+
+
+class ResidencyManager(Protocol):
+    def reserve(
+        self,
+        binding: RegistryBinding,
+        observation: StageObservation,
+    ) -> Reservation: ...
+
+
+class FenceResult(StrictRecord):
+    confirmed: bool
+    detail: str
+
+
+class Runtime(Protocol):
+    def current_worker_epoch(self) -> int: ...
+
+    def prepare_attached_fenced(
+        self,
+        permit: RealizationPermit,
+    ) -> PreparedGeneration: ...
+
+    def publish_generation(
+        self,
+        prepared: PreparedGeneration,
+        receipt: RealizedActivationReceipt,
+    ) -> PublishedGeneration: ...
+
+    def publication_record(
+        self,
+        generation: PublishedGeneration,
+    ) -> PublicationRecord | None: ...
+
+    def fence_generation(self, prepared: PreparedGeneration) -> FenceResult: ...
+
+    def poison_worker_epoch(self, worker_epoch: int) -> None: ...
+
+
+class Scheduler(Protocol):
+    def schedule(
+        self,
+        generation: PublishedGeneration,
+        response: ResponseReceipt,
+    ) -> str: ...
+
+
+class TelemetryWAL(Protocol):
+    def commit_selection(
+        self,
+        context: RouteAttemptContext,
+        binding: RegistryBinding,
+    ) -> SelectionReceipt: ...
+
+    def query_selection(self, idempotency_key: str) -> SelectionReceipt | None: ...
+
+    def commit_realized(
+        self,
+        context: RouteAttemptContext,
+        prepared: PreparedGeneration,
+        binding: RegistryBinding,
+        evidence: EvidenceState,
+    ) -> RealizedActivationReceipt: ...
+
+    def query_realized(
+        self,
+        idempotency_key: str,
+    ) -> RealizedActivationReceipt | None: ...
+
+    def commit_terminal(
+        self,
+        context: RouteAttemptContext,
+        code: RejectionCode,
+        cause_code: RejectionCode | None,
+        cleanup: CleanupOutcome | None,
+    ) -> TerminalAttemptReceipt: ...
+
+    def query_terminal(
+        self,
+        idempotency_key: str,
+    ) -> TerminalAttemptReceipt | None: ...
+
+    def commit_response(
+        self,
+        context: RouteAttemptContext,
+        generation: PublishedGeneration,
+    ) -> ResponseReceipt: ...
+
+    def query_response(self, idempotency_key: str) -> ResponseReceipt | None: ...
+
+
+def utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
+
+
+def _authority(
+    snapshot: AuthenticatedRegistrySnapshot,
+    expected_scope: RevisionScope,
+    high_water: HighWaterStore,
+    at: datetime.datetime,
+) -> RegistryBinding | RejectionCode:
+    binding = snapshot.binding
+    if binding.scope != expected_scope:
+        return RejectionCode.INCOMPATIBLE_MANIFEST
+    if binding.issued_at.tzinfo is None or binding.authority_deadline.tzinfo is None:
+        return RejectionCode.INCOMPATIBLE_MANIFEST
+    if binding.issued_at > at:
+        return RejectionCode.AUTHORITY_NOT_YET_ISSUED
+    try:
+        decision = high_water.compare_and_persist(
+            expected_scope,
+            HighWaterProposal(
+                revision=binding.revision,
+                snapshot_digest=binding.snapshot_digest,
+            ),
+        )
+    except (HighWaterFault, OSError):
+        return RejectionCode.HIGH_WATER_UNAVAILABLE
+    if decision is HighWaterDecision.STALE:
+        return RejectionCode.ROLLBACK_REJECTED
+    if decision is HighWaterDecision.FORK:
+        return RejectionCode.AUTHORITY_FORK
+    if binding.lifecycle is not Lifecycle.ACTIVE:
+        return RejectionCode.LIFECYCLE_NOT_ACTIVE
+    if binding.authority_deadline <= at:
+        return RejectionCode.AUTHORITY_EXPIRED
+    return binding
+
+
+def _matches_manifest(manifest: AdapterManifest, binding: RegistryBinding) -> bool:
+    return (
+        manifest.scope == binding.scope
+        and manifest.manifest_digest == binding.manifest_digest
+        and (
+            manifest.compatibility_condition_digest
+            == binding.compatibility_condition_digest
+        )
+        and (
+            manifest.expected_runtime_envelope_digest
+            == binding.expected_runtime_envelope_digest
+        )
+        and manifest.base_digest == binding.base_digest
+        and manifest.declared_module_map_digest == binding.module_map_digest
+        and manifest.declared_artifact_digest == binding.artifact_digest
+        and manifest.evidence_references == binding.evidence_references
+    )
+
+
+def _evidence_rejection(
+    evidence: EvidenceState,
+    binding: RegistryBinding,
+    at: datetime.datetime,
+) -> RejectionCode | None:
+    if not evidence.active:
+        return RejectionCode.EVIDENCE_REVOKED
+    if evidence.expires_at.tzinfo is None:
+        return RejectionCode.EVIDENCE_PACKET_MISMATCH
+    if evidence.expires_at <= at:
+        return RejectionCode.EVIDENCE_EXPIRED
+    if (
+        evidence.evidence_packet_digest != binding.evidence_packet_digest
+        or evidence.subject_manifest_digest != binding.manifest_digest
+        or (
+            evidence.compatibility_condition_digest
+            != binding.compatibility_condition_digest
+        )
+    ):
+        return RejectionCode.EVIDENCE_PACKET_MISMATCH
+    return None
+
+
+def _verify_retained(
+    artifact: RetainedArtifact,
+    binding: RegistryBinding,
+) -> StageObservation | RejectionCode:
+    try:
+        observed = artifact.observation()
+    except (ArtifactFault, OSError):
+        return RejectionCode.ARTIFACT_IO_FAILED
+    if observed.artifact_digest != binding.artifact_digest:
+        return RejectionCode.ARTIFACT_DIGEST_MISMATCH
+    if observed.module_map_digest != binding.module_map_digest:
+        return RejectionCode.POST_STAGE_MODULE_MAP_DRIFT
+    return observed
+
+
+def _record_terminal(
+    wal: TelemetryWAL,
+    context: RouteAttemptContext,
+    code: RejectionCode,
+    *,
+    cause_code: RejectionCode | None = None,
+    cleanup: CleanupOutcome | None = None,
+) -> Rejected:
+    receipt = None
+    try:
+        receipt = wal.commit_terminal(context, code, cause_code, cleanup)
+    except AcknowledgementTimeout:
+        receipt = wal.query_terminal(context.idempotency_key)
+    except (WALFault, OSError):
+        pass
+    return Rejected(code, context, cause_code, receipt, cleanup)
+
+
+def _selection(
+    wal: TelemetryWAL,
+    context: RouteAttemptContext,
+    binding: RegistryBinding,
+) -> SelectionReceipt | None:
+    try:
+        return wal.commit_selection(context, binding)
+    except AcknowledgementTimeout:
+        return wal.query_selection(context.idempotency_key)
+    except (WALFault, OSError):
+        return None
+
+
+def _cleanup(
+    admitted: AdmissionAccepted,
+    runtime: Runtime | None = None,
+    prepared: PreparedGeneration | None = None,
+) -> CleanupOutcome:
+    errors: list[str] = []
+    fence_required = runtime is not None and prepared is not None
+    fence_confirmed: bool | None = None
+    poisoned = False
+    if fence_required:
+        try:
+            fence = runtime.fence_generation(prepared)
+            fence_confirmed = fence.confirmed
+            if not fence.confirmed:
+                errors.append(f"fence:{fence.detail}")
+        except (RuntimeFault, OSError) as exc:
+            fence_confirmed = False
+            errors.append(f"fence:{type(exc).__name__}")
+        if not fence_confirmed:
+            try:
+                runtime.poison_worker_epoch(prepared.worker_epoch)
+                poisoned = True
+            except (RuntimeFault, OSError) as exc:
+                errors.append(f"poison:{type(exc).__name__}")
+
+    released = False
+    try:
+        admitted.reservation.release()
+        released = True
+    except (RuntimeError, OSError) as exc:
+        errors.append(f"reservation:{type(exc).__name__}")
+
+    discarded = False
+    try:
+        admitted.artifact.discard()
+        discarded = True
+    except (RuntimeError, OSError) as exc:
+        errors.append(f"artifact:{type(exc).__name__}")
+
+    return CleanupOutcome(
+        fence_required=fence_required,
+        fence_confirmed=fence_confirmed,
+        worker_epoch_poisoned=poisoned,
+        reservation_released=released,
+        artifact_discarded=discarded,
+        errors=tuple(errors),
+    )
+
+
+def _reject_admitted(
+    wal: TelemetryWAL,
+    context: RouteAttemptContext,
+    code: RejectionCode,
+    admitted: AdmissionAccepted,
+    runtime: Runtime | None = None,
+    prepared: PreparedGeneration | None = None,
+) -> Rejected:
+    cleanup = _cleanup(admitted, runtime, prepared)
+    if cleanup.fence_required and not cleanup.fence_confirmed:
+        return _record_terminal(
+            wal,
+            context,
+            RejectionCode.FENCE_UNCONFIRMED,
+            cause_code=code,
+            cleanup=cleanup,
+        )
+    return _record_terminal(wal, context, code, cleanup=cleanup)
+
+
+def admit(
+    manifest: AdapterManifest,
+    snapshot: AuthenticatedRegistrySnapshot,
+    context: RouteAttemptContext,
+    verifier: RegistryVerifier,
+    high_water: HighWaterStore,
+    ledger: EvidenceLedger,
+    stager: ArtifactStager,
+    residency: ResidencyManager,
+    wal: TelemetryWAL,
+    *,
+    at: datetime.datetime | None = None,
+) -> Accepted[AdmissionAccepted] | Rejected:
+    selection = _selection(wal, context, snapshot.binding)
+    if selection is None:
+        return _record_terminal(
+            wal,
+            context,
+            RejectionCode.SELECTION_WAL_UNAVAILABLE,
+        )
+    now = utc_now() if at is None else at
+    try:
+        current = verifier.confirm(snapshot, at=now)
+    except (VerifierFault, OSError):
+        return _record_terminal(wal, context, RejectionCode.VERIFIER_FAILED)
+
+    binding = _authority(current, manifest.scope, high_water, now)
+    if isinstance(binding, RejectionCode):
+        return _record_terminal(wal, context, binding)
+    if not _matches_manifest(manifest, binding):
+        return _record_terminal(
+            wal,
+            context,
+            RejectionCode.INCOMPATIBLE_MANIFEST,
+        )
+    try:
+        evidence = ledger.validate(binding.evidence_references)
+    except (EvidenceFault, OSError):
+        return _record_terminal(wal, context, RejectionCode.EVIDENCE_UNAVAILABLE)
+    evidence_rejection = _evidence_rejection(evidence, binding, now)
+    if evidence_rejection is not None:
+        return _record_terminal(wal, context, evidence_rejection)
+    try:
+        artifact = stager.stage(manifest, binding)
+    except (ArtifactFault, OSError):
+        return _record_terminal(wal, context, RejectionCode.ARTIFACT_IO_FAILED)
+    observed = _verify_retained(artifact, binding)
+    if isinstance(observed, RejectionCode):
+        try:
+            artifact.discard()
+        except (RuntimeError, OSError):
+            pass
+        return _record_terminal(wal, context, observed)
+    try:
+        reservation = residency.reserve(binding, observed)
+    except (ResidencyFault, OSError):
+        try:
+            artifact.discard()
+        except (RuntimeError, OSError):
+            pass
+        return _record_terminal(wal, context, RejectionCode.RESIDENCY_UNAVAILABLE)
+    return Accepted(
+        AdmissionAccepted(
+            manifest,
+            binding,
+            evidence,
+            artifact,
+            observed,
+            reservation,
+            selection,
+        )
+    )
+
+
+def realize(
+    admitted: AdmissionAccepted,
+    context: RouteAttemptContext,
+    verifier: RegistryVerifier,
+    high_water: HighWaterStore,
+    ledger: EvidenceLedger,
+    wal: TelemetryWAL,
+    runtime: Runtime,
+    monotonic_now: float,
+    *,
+    at: datetime.datetime | None = None,
+) -> Accepted[Realized] | Rejected:
+    now = utc_now() if at is None else at
+    try:
+        current = verifier.revalidate(admitted, at=now)
+    except (VerifierFault, OSError):
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.VERIFIER_FAILED,
+            admitted,
+        )
+    binding = _authority(current, admitted.manifest.scope, high_water, now)
+    if isinstance(binding, RejectionCode):
+        return _reject_admitted(wal, context, binding, admitted)
+    if not _matches_manifest(admitted.manifest, binding):
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.REGISTRY_DRIFT,
+            admitted,
+        )
+    try:
+        evidence = ledger.revalidate(
+            binding.evidence_references,
+            admitted.evidence_at_admission,
+        )
+    except (EvidenceFault, OSError):
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.EVIDENCE_UNAVAILABLE,
+            admitted,
+        )
+    evidence_rejection = _evidence_rejection(evidence, binding, now)
+    if evidence_rejection is not None:
+        return _reject_admitted(wal, context, evidence_rejection, admitted)
+    observed = _verify_retained(admitted.artifact, binding)
+    if isinstance(observed, RejectionCode):
+        return _reject_admitted(wal, context, observed, admitted)
+    if observed.retained_handle_id != admitted.observation.retained_handle_id:
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.HANDLE_DRIFT,
+            admitted,
+        )
+    if (
+        monotonic_now >= context.monotonic_deadline
+        or context.remaining_budget <= 0
+    ):
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.BUDGET_EXHAUSTED,
+            admitted,
+        )
+
+    worker_epoch = runtime.current_worker_epoch()
+    permit = RealizationPermit(context, binding, evidence, observed, worker_epoch)
+    try:
+        prepared = runtime.prepare_attached_fenced(permit)
+    except (RuntimeFault, OSError):
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.ATTACHMENT_FAILED,
+            admitted,
+        )
+    if prepared.observed_base_digest != binding.base_digest:
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.OBSERVED_BASE_MISMATCH,
+            admitted,
+            runtime,
+            prepared,
+        )
+    if (
+        prepared.runtime_envelope_digest
+        != binding.expected_runtime_envelope_digest
+    ):
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.RUNTIME_ENVELOPE_MISMATCH,
+            admitted,
+            runtime,
+            prepared,
+        )
+    if prepared.worker_epoch != worker_epoch:
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.ACTIVATION_RECEIPT_MISMATCH,
+            admitted,
+            runtime,
+            prepared,
+        )
+
+    try:
+        receipt = wal.commit_realized(context, prepared, binding, evidence)
+    except AcknowledgementTimeout:
+        receipt = wal.query_realized(context.idempotency_key)
+        if receipt is None:
+            return _reject_admitted(
+                wal,
+                context,
+                RejectionCode.ACTIVATION_RECEIPT_UNKNOWN,
+                admitted,
+                runtime,
+                prepared,
+            )
+    except (WALFault, OSError):
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.ACTIVATION_RECEIPT_FAILED,
+            admitted,
+            runtime,
+            prepared,
+        )
+    if (
+        receipt.context != context
+        or receipt.generation_id != prepared.generation_id
+        or receipt.worker_epoch != prepared.worker_epoch
+        or receipt.worker_epoch != runtime.current_worker_epoch()
+    ):
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.ACTIVATION_RECEIPT_MISMATCH,
+            admitted,
+            runtime,
+            prepared,
+        )
+    try:
+        published = runtime.publish_generation(prepared, receipt)
+    except (RuntimeFault, OSError):
+        return _reject_admitted(
+            wal,
+            context,
+            RejectionCode.PUBLICATION_FAILED,
+            admitted,
+            runtime,
+            prepared,
+        )
+    return Accepted(Realized(published, receipt, admitted.selection_receipt))
+
+
+def record_response(
+    wal: TelemetryWAL,
+    context: RouteAttemptContext,
+    published: PublishedGeneration,
+) -> Accepted[ResponseReceipt] | Rejected:
+    try:
+        receipt = wal.commit_response(context, published)
+    except AcknowledgementTimeout:
+        receipt = wal.query_response(context.idempotency_key)
+        if receipt is None:
+            return _record_terminal(
+                wal,
+                context,
+                RejectionCode.RESPONSE_RECEIPT_FAILED,
+            )
+    except (WALFault, OSError):
+        return _record_terminal(
+            wal,
+            context,
+            RejectionCode.RESPONSE_RECEIPT_FAILED,
+        )
+    if (
+        receipt.context != context
+        or receipt.receipt_id != context.response_receipt_id
+        or receipt.generation_id != published.generation_id
+        or receipt.activation_receipt_id != published.activation_receipt_id
+    ):
+        return _record_terminal(
+            wal,
+            context,
+            RejectionCode.RESPONSE_RECEIPT_FAILED,
+        )
+    return Accepted(receipt)
+
+
+def schedule(
+    wal: TelemetryWAL,
+    runtime: Runtime,
+    scheduler: Scheduler,
+    generation: PublishedGeneration,
+    response: ResponseReceipt,
+) -> str:
+    if not isinstance(generation, PublishedGeneration):
+        raise TypeError("scheduler accepts only PublishedGeneration")
+    publication = runtime.publication_record(generation)
+    if publication is None:
+        raise PermissionError("generation is not registered by runtime publication")
+    if (
+        publication.generation_id != generation.generation_id
+        or publication.activation_receipt_id != generation.activation_receipt_id
+        or publication.context != generation.context
+        or publication.worker_epoch != generation.worker_epoch
+    ):
+        raise PermissionError("publication registry does not bind exact generation")
+    current_epoch = runtime.current_worker_epoch()
+    if generation.worker_epoch != current_epoch:
+        raise PermissionError("published generation worker epoch is not current")
+    try:
+        durable_response = wal.query_response(generation.context.idempotency_key)
+    except (WALFault, OSError) as exc:
+        raise PermissionError("durable response authority is unavailable") from exc
+    if durable_response is None:
+        raise PermissionError("response is not registered by durable telemetry")
+    if durable_response != response:
+        raise PermissionError("durable response record does not bind exact receipt")
+    if (
+        response.receipt_id != generation.context.response_receipt_id
+        or response.context != generation.context
+        or response.generation_id != generation.generation_id
+        or response.activation_receipt_id != generation.activation_receipt_id
+    ):
+        raise ValueError("response receipt does not bind the published generation")
+    return scheduler.schedule(generation, response)

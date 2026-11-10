@@ -1,0 +1,69 @@
+from pydantic import BaseModel, Field, field_validator
+from typing import Literal
+import re
+
+# 1. Input Schema
+class RefundRequest(BaseModel):
+    order_id: str = Field(..., pattern=r'^ORD-\d{6}$')
+    reason: Literal["defective", "wrong_item", "not_needed"]
+    customer_tier: Literal["free", "pro", "enterprise"]
+    
+    @field_validator('order_id')
+    @classmethod
+    def validate_order_format(cls, v: str) -> str:
+        if not re.match(r'^ORD-\d{6}$', v):
+            raise ValueError("order_id must match format ORD-XXXXXX")
+        return v
+
+# 2. Output Schema
+class RefundDecision(BaseModel):
+    approved: bool
+    refund_amount: float = Field(..., ge=0, le=10000)
+    reasoning: str = Field(..., min_length=50)
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
+# 3. The Contract
+class RefundAgent(AgenticContract):
+    @property
+    def name(self) -> str:
+        return "billing.refund_processor.v2"
+    
+    @property
+    def input_schema(self) -> type[BaseModel]:
+        return RefundRequest
+    
+    @property
+    def context_scope(self) -> List[str]:
+        return [
+            "user.id",
+            "user.tier",
+            "billing.order_history",
+            "billing.refund_policy"
+        ]
+    
+    @property
+    def tools(self) -> List[Tool]:
+        return [get_order_details, calculate_refund_amount]
+    
+    @property
+    def guardrails(self) -> List[Callable[[str], bool]]:
+        def no_excessive_refund(output: str) -> bool:
+            decision = RefundDecision.model_validate_json(output)
+            order = get_order_details(decision.order_id)
+            return (
+                decision.outcome != "approve"
+                or decision.refund_amount == calculate_refund_amount(order)
+            )
+        
+        def reasoning_length_check(output: str) -> bool:
+            return len(output) >= 50
+        
+        return [no_excessive_refund, reasoning_length_check]
+    
+    @property
+    def exit_criteria(self) -> Dict[str, float | int]:
+        return {
+            'confidence_threshold': 0.85,
+            'max_retries': 2,
+            'timeout_seconds': 15.0
+        }

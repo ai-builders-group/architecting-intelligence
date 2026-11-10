@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from enum import StrEnum
+from typing import Annotated, Literal, Protocol, TypeAlias
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints
+
+Digest = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=r"^sha256:[0-9a-f]{64}$"),
+]
+Score = Annotated[
+    Decimal,
+    Field(strict=True, ge=Decimal("0"), le=Decimal("1")),
+]
+
+
+class Preference(StrEnum):
+    CANDIDATE = "candidate"
+    BASELINE = "baseline"
+    TIE = "tie"
+    ABSTAIN = "abstain"
+
+
+class MetricCase(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    case_digest: Digest
+    group_id: str
+    slice_ids: tuple[str, ...]
+    input_value: JsonValue
+    reference_value: JsonValue | None = None
+
+
+class BoundOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    case_digest: Digest
+    output_digest: Digest
+    value: JsonValue
+
+
+class BooleanObservation(BaseModel):
+    kind: Literal["boolean"] = "boolean"
+    passed: bool
+
+
+class ScalarObservation(BaseModel):
+    kind: Literal["scalar"] = "scalar"
+    score: Score
+
+
+class CountObservation(BaseModel):
+    kind: Literal["counts"] = "counts"
+    true_positive: int = Field(ge=0)
+    false_positive: int = Field(ge=0)
+    false_negative: int = Field(ge=0)
+
+
+class PreferenceObservation(BaseModel):
+    kind: Literal["preference"] = "preference"
+    choice: Preference
+
+
+Observation: TypeAlias = Annotated[
+    BooleanObservation
+    | ScalarObservation
+    | CountObservation
+    | PreferenceObservation,
+    Field(discriminator="kind"),
+]
+
+
+class MetricResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    execution_key: Digest
+    metric_id: str
+    metric_revision: str
+    case_digest: Digest
+    candidate_output_digest: Digest
+    baseline_output_digest: Digest | None = None
+    protocol_digest: Digest
+    raw_evidence_digest: Digest
+    observation: Observation
+
+
+class Metric(Protocol):
+    metric_id: str
+    metric_revision: str
+
+    def evaluate(
+        self,
+        *,
+        case: MetricCase,
+        candidate: BoundOutput,
+        baseline: BoundOutput | None,
+        protocol_digest: Digest,
+    ) -> MetricResult: ...

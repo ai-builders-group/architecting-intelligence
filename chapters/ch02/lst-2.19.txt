@@ -1,0 +1,42 @@
+
+### The Enforcement Mechanism
+
+The ARD is not a suggestion. It is a **compile-time dependency**.
+
+**CI/CD Integration:**
+
+```python
+# .github/workflows/agent_validation.yml
+name: ARD Compliance Check
+
+on:
+  pull_request:
+    paths:
+      - 'prompts/**'
+      - 'agents/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check ARD coverage
+        run: |
+          # Compare each modified prompt file with the ARD files changed in the
+          # same pull request
+          python scripts/check_ard_coverage.py
+      
+      - name: Validate ARD Schema
+        run: |
+          # Ensure ARD follows the five-plane template
+          python scripts/validate_ard_schema.py
+      
+      - name: Run Golden Dataset Eval
+        run: |
+          # Execute the agent against the Golden Dataset
+          # Fail if pass_rate < threshold defined in ARD
+          python scripts/run_eval_harness.py
+

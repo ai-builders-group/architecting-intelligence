@@ -1,0 +1,167 @@
+# chapters/ch04/lst-4.4.txt
+from pydantic import BaseModel, Field, field_validator
+from typing import Annotated
+import structlog
+
+logger = structlog.get_logger()
+
+class TierCostProfile(BaseModel):
+    """
+    Complete cost profile for a single inference tier.
+    All monetary values in USD.
+    """
+    tier_name: str = Field(..., description="Human-readable tier identifier (e.g., 'Haiku', 'Opus').")
+    input_cost_per_1m: Annotated[float, Field(gt=0.0)] = Field(..., description="Input token cost per 1M tokens.")
+    output_cost_per_1m: Annotated[float, Field(gt=0.0)] = Field(..., description="Output token cost per 1M tokens.")
+    p95_latency_ms: Annotated[int, Field(gt=0)] = Field(..., description="95th percentile latency (milliseconds).")
+    success_probability: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
+        ..., 
+        description="Empirical success rate for the target task class."
+    )
+
+class TaskProfile(BaseModel):
+    """Defines the token and latency characteristics of a specific request."""
+    input_tokens: Annotated[int, Field(gt=0)] = Field(..., description="Number of input tokens.")
+    output_tokens: Annotated[int, Field(gt=0)] = Field(..., description="Expected number of output tokens.")
+    latency_sensitivity_usd_per_ms: Annotated[float, Field(ge=0.0)] = Field(
+        default=0.0001,
+        description="Business cost of latency (USD per millisecond). Zero for async tasks."
+    )
+
+class RouterCostProfile(BaseModel):
+    """Defines the cost of the routing operation itself."""
+    inference_cost_usd: Annotated[float, Field(ge=0.0)] = Field(
+        default=0.0001,
+        description="API/compute cost of the classifier."
+    )
+    latency_ms: Annotated[int, Field(gt=0)] = Field(
+        default=10,
+        description="p95 latency of the router (milliseconds)."
+    )
+
+class NRBResult(BaseModel):
+    """
+    The complete output of the NRB calculation.
+    This schema is logged for every routing decision to enable
+    continuous economic analysis and router tuning.
+    """
+    net_routing_benefit_usd: float = Field(..., description="The calculated NRB (positive = route, negative = bypass).")
+    expected_savings_usd: float = Field(..., description="Expected savings if lower tier succeeds.")
+    expected_penalty_usd: float = Field(..., description="Expected penalty if lower tier fails.")
+    router_tax_usd: float = Field(..., description="Fixed cost of the routing decision.")
+    decision: str = Field(..., description="Recommended action: 'ROUTE_LOW' or 'USE_HIGH'.")
+    breakeven_probability: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
+        ..., 
+        description="Minimum success probability required for routing to be viable."
+    )
+
+class NRBCalculator:
+    """
+    Production-grade Net Routing Benefit calculator.
+    
+    This class implements the complete economic decision model
+    for Intelligence Arbitrage, accounting for API costs, latency
+    penalties, failure penalties, and router overhead.
+    """
+    
+    def __init__(
+        self, 
+        router_cost: RouterCostProfile,
+        fallback_overhead_usd: float = 0.05
+    ):
+        """
+        Args:
+            router_cost: The cost profile of the routing mechanism.
+            fallback_overhead_usd: Fixed architectural tax of retry orchestration.
+        """
+        self.router_cost = router_cost
+        self.fallback_overhead = fallback_overhead_usd
+    
+    def calculate_operational_cost(
+        self, 
+        tier: TierCostProfile, 
+        task: TaskProfile
+    ) -> float:
+        """
+        Compute the total operational cost C_i(τ) for a tier.
+        
+        Returns:
+            Total cost in USD (API + latency).
+        """
+        # API cost component
+        api_cost = (
+            (task.input_tokens * tier.input_cost_per_1m / 1_000_000) +
+            (task.output_tokens * tier.output_cost_per_1m / 1_000_000)
+        )
+        
+        # Latency cost component
+        latency_cost = task.latency_sensitivity_usd_per_ms * tier.p95_latency_ms
+        
+        return api_cost + latency_cost
+    
+    def calculate_nrb(
+        self,
+        task: TaskProfile,
+        tier_low: TierCostProfile,
+        tier_high: TierCostProfile
+    ) -> NRBResult:
+        """
+        Execute the complete NRB calculation.
+        
+        Args:
+            task: The task's token and latency profile.
+            tier_low: The lower-cost tier being evaluated.
+            tier_high: The baseline (fail-safe) tier.
+        
+        Returns:
+            NRBResult containing the decision and full cost breakdown.
+        """
+        # Compute total operational costs
+        C_low = self.calculate_operational_cost(tier_low, task)
+        C_high = self.calculate_operational_cost(tier_high, task)
+        
+        # Savings delta
+        delta_C = C_high - C_low
+        
+        # Penalty if lower tier fails
+        C_penalty = C_low + self.fallback_overhead
+        
+        # Router tax
+        C_router = (
+            self.router_cost.inference_cost_usd + 
+            (task.latency_sensitivity_usd_per_ms * self.router_cost.latency_ms)
+        )
+        
+        # Expected benefit and penalty
+        P_low = tier_low.success_probability
+        expected_savings = P_low * delta_C
+        expected_penalty = (1 - P_low) * C_penalty
+        
+        # Net Routing Benefit
+        nrb = expected_savings - expected_penalty - C_router
+        
+        # Breakeven probability
+        breakeven_prob = (C_penalty + C_router) / (delta_C + C_penalty)
+        
+        # Decision logic
+        decision = "ROUTE_LOW" if nrb > 0 else "USE_HIGH"
+        
+        result = NRBResult(
+            net_routing_benefit_usd=nrb,
+            expected_savings_usd=expected_savings,
+            expected_penalty_usd=expected_penalty,
+            router_tax_usd=C_router,
+            decision=decision,
+            breakeven_probability=min(breakeven_prob, 1.0)  # Cap at 1.0 for numerical stability
+        )
+        
+        logger.info(
+            "nrb.calculated",
+            tier_low=tier_low.tier_name,
+            tier_high=tier_high.tier_name,
+            nrb=f"${nrb:.4f}",
+            decision=decision,
+            breakeven_prob=f"{breakeven_prob:.2%}"
+        )
+        
+        return result

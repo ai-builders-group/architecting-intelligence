@@ -1,0 +1,1110 @@
+# chapters/ch12/lst-12.5.txt
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping
+from datetime import date
+from types import MappingProxyType
+from typing import Annotated, Literal, Self, TypeAlias
+
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
+
+SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
+Sha256: TypeAlias = Annotated[
+    str,
+    Field(strict=True, pattern=SHA256_PATTERN),
+]
+
+
+def normalize_non_blank(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("value must contain non-whitespace characters")
+    return normalized
+
+
+NonBlank: TypeAlias = Annotated[
+    str,
+    Field(strict=True),
+    AfterValidator(normalize_non_blank),
+]
+
+PINNED_REVISION = re.compile(r"(?:[A-Za-z0-9._+]+-)*v?[0-9][A-Za-z0-9._+]*")
+SCHEMA_VERSION = "evaluation-subject-v3"
+
+
+class FrozenModel(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        revalidate_instances="always",
+    )
+
+    def validated_copy(self, *, update: Mapping[str, object]) -> Self:
+        payload = self.model_dump(
+            mode="python",
+            exclude_computed_fields=True,
+        )
+        payload.update(update)
+        return type(self).model_validate(payload)
+
+
+def canonical_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+class IdentityEvidenceReceipt(FrozenModel):
+    claimed_identifier: NonBlank
+    claimed_revision: NonBlank
+    verifier_boundary: NonBlank
+    method: Literal[
+        "content_addressed_manifest",
+        "dated_provider_release_note",
+        "registered_immutable_release",
+    ]
+    evidence_locator: NonBlank
+    evidence_digest: Sha256
+    verified_on: date
+    expires_on: date | None = None
+
+    @model_validator(mode="after")
+    def ordered_dates(self) -> Self:
+        if self.expires_on is not None and self.expires_on < self.verified_on:
+            raise ValueError("expires_on precedes verified_on")
+        return self
+
+
+class KnownIdentity(FrozenModel):
+    kind: Literal["known"] = "known"
+    identifier: NonBlank
+    revision: NonBlank
+    identity_basis: Literal[
+        "content_addressed_artifact",
+        "operator_configured_exact_value",
+        "provider_observed_revision",
+    ] = "content_addressed_artifact"
+    digest: Sha256 | None = None
+    identity_evidence: IdentityEvidenceReceipt | None = None
+
+    @field_validator("revision")
+    @classmethod
+    def require_pinned_revision(cls, value: str) -> str:
+        normalized = value.strip()
+        if not PINNED_REVISION.fullmatch(normalized):
+            raise ValueError("revision must end in a pinned version or date")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_identity_evidence(self) -> Self:
+        if self.identity_basis == "content_addressed_artifact" and self.digest is None:
+            raise ValueError("content-addressed identity requires digest")
+        if self.identity_basis == "provider_observed_revision":
+            if self.identity_evidence is None:
+                raise ValueError(
+                    "provider_observed_revision requires identity evidence",
+                )
+            if (
+                self.identity_evidence.claimed_identifier != self.identifier
+                or self.identity_evidence.claimed_revision != self.revision
+            ):
+                raise ValueError(
+                    "identity evidence must bind the exact identifier and revision",
+                )
+        return self
+
+    def behavior_key(self) -> dict[str, str | None]:
+        return {
+            "kind": self.kind,
+            "identifier": self.identifier,
+            "revision": self.revision,
+            "digest": self.digest,
+        }
+
+
+class UnknownIdentity(FrozenModel):
+    kind: Literal["unknown"] = "unknown"
+    provider_or_boundary: NonBlank
+    observed_on: date
+    public_identity: NonBlank
+    reason: NonBlank
+
+    def behavior_key(self) -> dict[str, str]:
+        return {
+            "kind": self.kind,
+            "provider_or_boundary": self.provider_or_boundary,
+            "public_identity": self.public_identity,
+        }
+
+
+class NotApplicable(FrozenModel):
+    kind: Literal["not_applicable"] = "not_applicable"
+    absence_basis: Literal["surface_absent"] = "surface_absent"
+    reason: NonBlank
+
+    def behavior_key(self) -> dict[str, str]:
+        return {
+            "kind": self.kind,
+            "absence_basis": self.absence_basis,
+        }
+
+
+Identity: TypeAlias = Annotated[
+    KnownIdentity | UnknownIdentity,
+    Field(discriminator="kind"),
+]
+ConditionalIdentity: TypeAlias = Annotated[
+    KnownIdentity | UnknownIdentity | NotApplicable,
+    Field(discriminator="kind"),
+]
+RuntimeValue: TypeAlias = KnownIdentity | UnknownIdentity | NotApplicable
+TreatmentValue: TypeAlias = KnownIdentity | NotApplicable
+
+
+def behavior_key(value: RuntimeValue) -> dict[str, str | None]:
+    return value.behavior_key()
+
+
+def validate_requested_route(value: KnownIdentity) -> KnownIdentity:
+    if value.identity_basis != "operator_configured_exact_value":
+        raise ValueError(
+            "requested_route requires operator_configured_exact_value",
+        )
+    return value
+
+
+def validate_backend_identity(
+    value: KnownIdentity | UnknownIdentity,
+) -> KnownIdentity | UnknownIdentity:
+    if (
+        isinstance(value, KnownIdentity)
+        and value.identity_basis != "provider_observed_revision"
+    ):
+        raise ValueError(
+            "known backend identity requires provider_observed_revision",
+        )
+    return value
+
+
+RuntimeSurface: TypeAlias = Literal[
+    "requested_route",
+    "configured_backend_identity",
+    "reasoning_effort",
+    "prompt_policy",
+    "retrieval",
+    "tools",
+    "memory",
+    "topology",
+    "routing_policy",
+    "in_loop_evaluators",
+    "cache",
+    "budgets",
+    "fallback",
+    "tokenizer",
+    "sampling",
+    "adapter",
+    "locale",
+    "runtime_sandbox",
+    "hardware_kernel",
+    "external_services",
+    "concurrency_scheduler",
+]
+ConditionalSurface: TypeAlias = Literal[
+    "tokenizer",
+    "sampling",
+    "adapter",
+    "locale",
+    "runtime_sandbox",
+    "hardware_kernel",
+    "external_services",
+    "concurrency_scheduler",
+]
+ControlSurface: TypeAlias = RuntimeSurface | Literal[
+    "dataset_population",
+    "evaluators",
+]
+Arm: TypeAlias = Literal["baseline", "candidate"]
+
+REQUIRED_RUNTIME_SURFACES: tuple[RuntimeSurface, ...] = (
+    "requested_route",
+    "configured_backend_identity",
+    "reasoning_effort",
+    "prompt_policy",
+    "retrieval",
+    "tools",
+    "memory",
+    "topology",
+    "routing_policy",
+    "in_loop_evaluators",
+    "cache",
+    "budgets",
+    "fallback",
+)
+CONDITIONAL_RUNTIME_SURFACES: tuple[ConditionalSurface, ...] = (
+    "tokenizer",
+    "sampling",
+    "adapter",
+    "locale",
+    "runtime_sandbox",
+    "hardware_kernel",
+    "external_services",
+    "concurrency_scheduler",
+)
+ALL_RUNTIME_SURFACES: tuple[RuntimeSurface, ...] = (
+    *REQUIRED_RUNTIME_SURFACES,
+    *CONDITIONAL_RUNTIME_SURFACES,
+)
+
+
+class RuntimeConfiguration(FrozenModel):
+    requested_route: KnownIdentity
+    configured_backend_identity: Identity
+    reasoning_effort: Identity
+    prompt_policy: Identity
+    retrieval: Identity
+    tools: Identity
+    memory: Identity
+    topology: Identity
+    routing_policy: Identity
+    in_loop_evaluators: Identity
+    cache: Identity
+    budgets: Identity
+    fallback: Identity
+
+    tokenizer: ConditionalIdentity
+    sampling: ConditionalIdentity
+    adapter: ConditionalIdentity
+    locale: ConditionalIdentity
+    runtime_sandbox: ConditionalIdentity
+    hardware_kernel: ConditionalIdentity
+    external_services: ConditionalIdentity
+    concurrency_scheduler: ConditionalIdentity
+    conditional_presence: Mapping[
+        ConditionalSurface,
+        Literal["present", "absent"],
+    ]
+
+    @field_validator("requested_route", mode="after")
+    @classmethod
+    def require_operator_requested_route(
+        cls,
+        value: KnownIdentity,
+    ) -> KnownIdentity:
+        return validate_requested_route(value)
+
+    @field_validator("configured_backend_identity", mode="after")
+    @classmethod
+    def require_evidenced_configured_backend(
+        cls,
+        value: KnownIdentity | UnknownIdentity,
+    ) -> KnownIdentity | UnknownIdentity:
+        return validate_backend_identity(value)
+
+    @field_validator("conditional_presence", mode="after")
+    @classmethod
+    def freeze_conditional_presence(
+        cls,
+        value: Mapping[ConditionalSurface, Literal["present", "absent"]],
+    ) -> Mapping[ConditionalSurface, Literal["present", "absent"]]:
+        return MappingProxyType(dict(sorted(value.items())))
+
+    @field_serializer("conditional_presence")
+    def serialize_conditional_presence(
+        self,
+        value: Mapping[ConditionalSurface, Literal["present", "absent"]],
+    ) -> dict[ConditionalSurface, Literal["present", "absent"]]:
+        return dict(sorted(value.items()))
+
+    @model_validator(mode="after")
+    def validate_conditional_presence(self) -> Self:
+        if set(self.conditional_presence) != set(CONDITIONAL_RUNTIME_SURFACES):
+            raise ValueError("conditional presence must declare every surface")
+        for surface in CONDITIONAL_RUNTIME_SURFACES:
+            value = getattr(self, surface)
+            presence = self.conditional_presence[surface]
+            if presence == "present" and isinstance(value, NotApplicable):
+                raise ValueError(f"present {surface} cannot be not applicable")
+            if presence == "absent" and not isinstance(value, NotApplicable):
+                raise ValueError(f"absent {surface} must be not applicable")
+        return self
+
+    @computed_field
+    @property
+    def configuration_digest(self) -> str:
+        return canonical_sha256(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "conditional_presence": dict(
+                    sorted(self.conditional_presence.items()),
+                ),
+                "runtime": {
+                    surface: behavior_key(getattr(self, surface))
+                    for surface in ALL_RUNTIME_SURFACES
+                },
+            },
+        )
+
+    @computed_field
+    @property
+    def runtime_verification_digest(self) -> str:
+        return canonical_sha256(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "runtime_evidence": self.model_dump(
+                    mode="json",
+                    exclude={
+                        "configuration_digest",
+                        "runtime_verification_digest",
+                        "all_behavior_known",
+                    },
+                ),
+            },
+        )
+
+    @computed_field
+    @property
+    def all_behavior_known(self) -> bool:
+        return all(
+            not isinstance(getattr(self, surface), UnknownIdentity)
+            for surface in ALL_RUNTIME_SURFACES
+        )
+
+
+class PopulationIdentity(FrozenModel):
+    dataset_population: Identity
+
+    @computed_field
+    @property
+    def population_digest(self) -> str:
+        return canonical_sha256(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "population": behavior_key(self.dataset_population),
+            },
+        )
+
+
+class EvaluatorContract(FrozenModel):
+    evaluators: Identity
+
+    @computed_field
+    @property
+    def evaluator_digest(self) -> str:
+        return canonical_sha256(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "evaluators": behavior_key(self.evaluators),
+            },
+        )
+
+
+class ComparisonPlan(FrozenModel):
+    mode: Literal["whole_subject", "controlled"]
+    configuration_digests: Mapping[Arm, Sha256]
+    population: PopulationIdentity
+    evaluators: EvaluatorContract
+    varied_fields: tuple[RuntimeSurface, ...]
+    held_constant_fields: tuple[ControlSurface, ...]
+    declared_arm_values: Mapping[
+        Arm,
+        Mapping[RuntimeSurface, TreatmentValue],
+    ]
+
+    @field_validator("configuration_digests", mode="after")
+    @classmethod
+    def freeze_configuration_digests(
+        cls,
+        value: Mapping[Arm, Sha256],
+    ) -> Mapping[Arm, Sha256]:
+        return MappingProxyType(dict(sorted(value.items())))
+
+    @field_validator("declared_arm_values", mode="after")
+    @classmethod
+    def freeze_declared_arm_values(
+        cls,
+        value: Mapping[Arm, Mapping[RuntimeSurface, TreatmentValue]],
+    ) -> Mapping[Arm, Mapping[RuntimeSurface, TreatmentValue]]:
+        return MappingProxyType(
+            {
+                arm: MappingProxyType(dict(sorted(values.items())))
+                for arm, values in sorted(value.items())
+            },
+        )
+
+    @field_serializer("configuration_digests")
+    def serialize_configuration_digests(
+        self,
+        value: Mapping[Arm, Sha256],
+    ) -> dict[Arm, Sha256]:
+        return dict(sorted(value.items()))
+
+    @field_serializer("declared_arm_values")
+    def serialize_declared_arm_values(
+        self,
+        value: Mapping[Arm, Mapping[RuntimeSurface, TreatmentValue]],
+    ) -> dict[Arm, dict[RuntimeSurface, TreatmentValue]]:
+        return {
+            arm: dict(sorted(values.items()))
+            for arm, values in sorted(value.items())
+        }
+
+    @field_validator("varied_fields", "held_constant_fields")
+    @classmethod
+    def canonical_surface_order(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("comparison fields must be unique")
+        return tuple(sorted(value))
+
+    @model_validator(mode="after")
+    def validate_design(self) -> Self:
+        if self.mode == "whole_subject":
+            if (
+                self.configuration_digests
+                or self.varied_fields
+                or self.held_constant_fields
+                or self.declared_arm_values
+            ):
+                raise ValueError("whole_subject plans cannot declare paired fields")
+            return self
+
+        varied = set(self.varied_fields)
+        held = set(self.held_constant_fields)
+        all_surfaces = set(ALL_RUNTIME_SURFACES) | {
+            "dataset_population",
+            "evaluators",
+        }
+        if not varied or varied & held or varied | held != all_surfaces:
+            raise ValueError("controlled plan must partition every surface")
+        if not {"dataset_population", "evaluators"} <= held:
+            raise ValueError("population and evaluators must be held constants")
+        if set(self.configuration_digests) != {"baseline", "candidate"}:
+            raise ValueError(
+                "controlled plans bind both configuration digests",
+            )
+        if set(self.declared_arm_values) != {"baseline", "candidate"}:
+            raise ValueError("both controlled arms require declared values")
+        for values in self.declared_arm_values.values():
+            if set(values) != varied:
+                raise ValueError("declared arm values must match varied fields")
+            for surface, value in values.items():
+                if (
+                    isinstance(value, NotApplicable)
+                    and surface not in CONDITIONAL_RUNTIME_SURFACES
+                ):
+                    raise ValueError(
+                        "not-applicable treatment requires a conditional surface",
+                    )
+        if any(
+            behavior_key(self.declared_arm_values["baseline"][field])
+            == behavior_key(self.declared_arm_values["candidate"][field])
+            for field in varied
+        ):
+            raise ValueError(
+                "every declared treatment field must behaviorally vary",
+            )
+        return self
+
+    @computed_field
+    @property
+    def comparison_plan_digest(self) -> str:
+        return canonical_sha256(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "mode": self.mode,
+                "configuration_digests": dict(
+                    sorted(self.configuration_digests.items()),
+                ),
+                "population": behavior_key(self.population.dataset_population),
+                "evaluators": behavior_key(self.evaluators.evaluators),
+                "varied_fields": self.varied_fields,
+                "held_constant_fields": self.held_constant_fields,
+                "declared_arm_values": {
+                    arm: {
+                        surface: behavior_key(value)
+                        for surface, value in values.items()
+                    }
+                    for arm, values in self.declared_arm_values.items()
+                },
+            },
+        )
+
+
+def runtime_values(
+    runtime: RuntimeConfiguration,
+) -> dict[RuntimeSurface, RuntimeValue]:
+    return {
+        "requested_route": runtime.requested_route,
+        "configured_backend_identity": runtime.configured_backend_identity,
+        "reasoning_effort": runtime.reasoning_effort,
+        "prompt_policy": runtime.prompt_policy,
+        "retrieval": runtime.retrieval,
+        "tools": runtime.tools,
+        "memory": runtime.memory,
+        "topology": runtime.topology,
+        "routing_policy": runtime.routing_policy,
+        "in_loop_evaluators": runtime.in_loop_evaluators,
+        "cache": runtime.cache,
+        "budgets": runtime.budgets,
+        "fallback": runtime.fallback,
+        "tokenizer": runtime.tokenizer,
+        "sampling": runtime.sampling,
+        "adapter": runtime.adapter,
+        "locale": runtime.locale,
+        "runtime_sandbox": runtime.runtime_sandbox,
+        "hardware_kernel": runtime.hardware_kernel,
+        "external_services": runtime.external_services,
+        "concurrency_scheduler": runtime.concurrency_scheduler,
+    }
+
+
+class RunBoundBackendEvidence(FrozenModel):
+    run_id: NonBlank
+    request_id: NonBlank
+    claimed_backend_identifier: NonBlank
+    claimed_backend_revision: NonBlank
+    attestation_method: Literal[
+        "provider_response",
+        "gateway_attested",
+        "signed_execution_evidence",
+    ]
+    evidence_locator: NonBlank
+    evidence_digest: Sha256
+    observed_on: date
+
+
+class RunObservationReceipt(FrozenModel):
+    run_id: NonBlank
+    request_id: NonBlank
+    randomness_provenance: NonBlank
+    realized_route: NonBlank
+    realized_backend_identity: Identity
+    run_bound_backend_evidence: RunBoundBackendEvidence | None = None
+    execution_path_digest: Sha256
+    fallback_decisions: tuple[NonBlank, ...]
+    service_invocations: tuple[NonBlank, ...]
+    realized_output_digest: Sha256
+    observed_effects_digest: Sha256 | None = None
+    observed_on: date
+
+    @field_validator("realized_backend_identity", mode="after")
+    @classmethod
+    def require_evidenced_realized_backend(
+        cls,
+        value: KnownIdentity | UnknownIdentity,
+    ) -> KnownIdentity | UnknownIdentity:
+        return validate_backend_identity(value)
+
+    @model_validator(mode="after")
+    def bind_backend_evidence_to_run(self) -> Self:
+        backend = self.realized_backend_identity
+        evidence = self.run_bound_backend_evidence
+        if isinstance(backend, UnknownIdentity):
+            if evidence is not None:
+                raise ValueError(
+                    "unknown realized backend forbids run-bound evidence",
+                )
+            return self
+        if evidence is None:
+            raise ValueError(
+                "known realized backend requires run-bound evidence",
+            )
+        if evidence.run_id != self.run_id:
+            raise ValueError("run-bound evidence must match run_id")
+        if evidence.request_id != self.request_id:
+            raise ValueError("run-bound evidence must match request_id")
+        if evidence.claimed_backend_identifier != backend.identifier:
+            raise ValueError(
+                "run-bound evidence must match backend identifier",
+            )
+        if evidence.claimed_backend_revision != backend.revision:
+            raise ValueError(
+                "run-bound evidence must match backend revision",
+            )
+        if evidence.observed_on < self.observed_on:
+            raise ValueError(
+                "run-bound evidence cannot precede run observation",
+            )
+        return self
+
+    @computed_field
+    @property
+    def observation_digest(self) -> str:
+        return canonical_sha256(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "run_observation": self.model_dump(
+                    mode="json",
+                    exclude={"observation_digest"},
+                ),
+            },
+        )
+
+
+class EvaluationSubject(FrozenModel):
+    runtime: RuntimeConfiguration
+    population: PopulationIdentity
+    evaluators: EvaluatorContract
+    comparison_plan: ComparisonPlan
+    arm: Arm | None
+    evaluated_on: date
+    run_observation: RunObservationReceipt
+
+    @model_validator(mode="after")
+    def bind_declaration_and_freshness(self) -> Self:
+        if (
+            behavior_key(self.comparison_plan.population.dataset_population)
+            != behavior_key(self.population.dataset_population)
+        ):
+            raise ValueError(
+                "comparison_plan.population must equal population",
+            )
+        if (
+            behavior_key(self.comparison_plan.evaluators.evaluators)
+            != behavior_key(self.evaluators.evaluators)
+        ):
+            raise ValueError(
+                "comparison_plan.evaluators must equal evaluators",
+            )
+        if self.comparison_plan.mode == "whole_subject":
+            if self.arm is not None:
+                raise ValueError("whole_subject receipts have no paired arm")
+        else:
+            if self.arm is None:
+                raise ValueError("controlled receipts require an arm")
+            if (
+                self.configuration_digest
+                != self.comparison_plan.configuration_digests[self.arm]
+            ):
+                raise ValueError(
+                    "runtime does not match its declared configuration digest",
+                )
+            actual = runtime_values(self.runtime)
+            expected = self.comparison_plan.declared_arm_values[self.arm]
+            for field, declared_value in expected.items():
+                if behavior_key(actual[field]) != behavior_key(declared_value):
+                    raise ValueError(
+                        f"{field} does not match its declared {self.arm} value",
+                    )
+
+        evidence_values = [
+            *runtime_values(self.runtime).values(),
+            self.run_observation.realized_backend_identity,
+            self.population.dataset_population,
+            self.evaluators.evaluators,
+        ]
+        for value in evidence_values:
+            if isinstance(value, KnownIdentity) and value.identity_evidence:
+                evidence = value.identity_evidence
+                if evidence.verified_on > self.evaluated_on:
+                    raise ValueError("identity evidence is future-dated")
+                if (
+                    evidence.expires_on is not None
+                    and self.evaluated_on > evidence.expires_on
+                ):
+                    raise ValueError(
+                        "expired evidence cannot establish known identity",
+                    )
+            if (
+                isinstance(value, UnknownIdentity)
+                and value.observed_on > self.evaluated_on
+            ):
+                raise ValueError("unknown identity observation is future-dated")
+        if self.run_observation.observed_on > self.evaluated_on:
+            raise ValueError("run observation is future-dated")
+        run_bound_evidence = self.run_observation.run_bound_backend_evidence
+        if (
+            run_bound_evidence is not None
+            and run_bound_evidence.observed_on > self.evaluated_on
+        ):
+            raise ValueError("run-bound backend evidence is future-dated")
+        return self
+
+    @computed_field
+    @property
+    def configuration_digest(self) -> str:
+        return self.runtime.configuration_digest
+
+    @computed_field
+    @property
+    def verification_digest(self) -> str:
+        return canonical_sha256(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "runtime": self.runtime.model_dump(
+                    mode="json",
+                    exclude={
+                        "configuration_digest",
+                        "runtime_verification_digest",
+                        "all_behavior_known",
+                    },
+                ),
+                "population": self.population.model_dump(
+                    mode="json",
+                    exclude={"population_digest"},
+                ),
+                "evaluators": self.evaluators.model_dump(
+                    mode="json",
+                    exclude={"evaluator_digest"},
+                ),
+            },
+        )
+
+    @computed_field
+    @property
+    def receipt_digest(self) -> str:
+        return canonical_sha256(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "configuration_digest": self.configuration_digest,
+                "verification_digest": self.verification_digest,
+                "observation_digest": self.run_observation.observation_digest,
+                "population_digest": self.population.population_digest,
+                "evaluator_digest": self.evaluators.evaluator_digest,
+                "comparison_plan_digest": (
+                    self.comparison_plan.comparison_plan_digest
+                ),
+                "arm": self.arm,
+                "evaluated_on": self.evaluated_on.isoformat(),
+            },
+        )
+
+
+VerdictStatus: TypeAlias = Literal[
+    "COMPARABLE",
+    "NOT_COMPARABLE",
+    "INCONCLUSIVE",
+]
+ReasonCode: TypeAlias = Literal[
+    "comparison_not_declared",
+    "comparison_plan_mismatch",
+    "arm_pair_invalid",
+    "held_constant_mismatch",
+    "unknown_held_constant",
+]
+
+
+class ComparisonReason(FrozenModel):
+    code: ReasonCode
+    surface: ControlSurface | Literal["comparison_plan", "arm"]
+    detail: NonBlank
+
+
+class ComparisonVerdict(FrozenModel):
+    status: VerdictStatus
+    reasons: tuple[ComparisonReason, ...] = ()
+
+
+def control_value(
+    subject: EvaluationSubject,
+    surface: ControlSurface,
+) -> RuntimeValue:
+    if surface == "dataset_population":
+        return subject.population.dataset_population
+    if surface == "evaluators":
+        return subject.evaluators.evaluators
+    return runtime_values(subject.runtime)[surface]
+
+
+def compare_subjects(
+    baseline: EvaluationSubject,
+    candidate: EvaluationSubject,
+) -> ComparisonVerdict:
+    if (
+        baseline.comparison_plan.mode != "controlled"
+        or candidate.comparison_plan.mode != "controlled"
+    ):
+        return ComparisonVerdict(
+            status="INCONCLUSIVE",
+            reasons=(
+                ComparisonReason(
+                    code="comparison_not_declared",
+                    surface="comparison_plan",
+                    detail="both receipts require a controlled plan",
+                ),
+            ),
+        )
+    if (
+        baseline.comparison_plan.comparison_plan_digest
+        != candidate.comparison_plan.comparison_plan_digest
+    ):
+        return ComparisonVerdict(
+            status="NOT_COMPARABLE",
+            reasons=(
+                ComparisonReason(
+                    code="comparison_plan_mismatch",
+                    surface="comparison_plan",
+                    detail="paired receipts declare different controls or arms",
+                ),
+            ),
+        )
+    if {baseline.arm, candidate.arm} != {"baseline", "candidate"}:
+        return ComparisonVerdict(
+            status="NOT_COMPARABLE",
+            reasons=(
+                ComparisonReason(
+                    code="arm_pair_invalid",
+                    surface="arm",
+                    detail="one baseline and one candidate receipt are required",
+                ),
+            ),
+        )
+
+    mismatches: list[ComparisonReason] = []
+    unknowns: list[ComparisonReason] = []
+    for surface in baseline.comparison_plan.held_constant_fields:
+        left = control_value(baseline, surface)
+        right = control_value(candidate, surface)
+        if isinstance(left, UnknownIdentity) or isinstance(right, UnknownIdentity):
+            unknowns.append(
+                ComparisonReason(
+                    code="unknown_held_constant",
+                    surface=surface,
+                    detail="a held constant is not observable",
+                ),
+            )
+        elif behavior_key(left) != behavior_key(right):
+            mismatches.append(
+                ComparisonReason(
+                    code="held_constant_mismatch",
+                    surface=surface,
+                    detail="a declared control differs across arms",
+                ),
+            )
+
+    if mismatches:
+        return ComparisonVerdict(
+            status="NOT_COMPARABLE",
+            reasons=tuple(mismatches),
+        )
+    if unknowns:
+        return ComparisonVerdict(
+            status="INCONCLUSIVE",
+            reasons=tuple(unknowns),
+        )
+    return ComparisonVerdict(status="COMPARABLE")
+
+
+AttributionIdentityStatus: TypeAlias = Literal[
+    "ELIGIBLE",
+    "REJECTED",
+    "INCONCLUSIVE",
+]
+AttributionIdentityReasonCode: TypeAlias = Literal[
+    "whole_subject_mode",
+    "comparison_plan_mismatch",
+    "arm_pair_invalid",
+    "claim_scope_mismatch",
+    "configured_realized_backend_mismatch",
+    "controlled_pair_not_comparable",
+    "material_identity_unknown",
+]
+
+
+class AttributionIdentityReason(FrozenModel):
+    code: AttributionIdentityReasonCode
+    surface: RuntimeSurface | Literal[
+        "comparison_plan",
+        "arm",
+        "claimed_treatment_scope",
+        "pair",
+    ]
+    detail: NonBlank
+
+
+class AttributionIdentityVerdict(FrozenModel):
+    status: AttributionIdentityStatus
+    reasons: tuple[AttributionIdentityReason, ...] = ()
+
+
+class AttributionIdentityGate(FrozenModel):
+    baseline: EvaluationSubject
+    candidate: EvaluationSubject
+    claimed_treatment_scope: tuple[RuntimeSurface, ...]
+
+    @field_validator("claimed_treatment_scope")
+    @classmethod
+    def canonical_claim_scope(
+        cls,
+        value: tuple[RuntimeSurface, ...],
+    ) -> tuple[RuntimeSurface, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("claimed treatment scope must be unique")
+        return tuple(sorted(value))
+
+    @computed_field
+    @property
+    def verdict(self) -> AttributionIdentityVerdict:
+        baseline = self.baseline
+        candidate = self.candidate
+        if (
+            baseline.comparison_plan.mode
+            != candidate.comparison_plan.mode
+        ):
+            return AttributionIdentityVerdict(
+                status="REJECTED",
+                reasons=(
+                    AttributionIdentityReason(
+                        code="comparison_plan_mismatch",
+                        surface="comparison_plan",
+                        detail="paired subjects bind different comparison modes",
+                    ),
+                ),
+            )
+        if baseline.comparison_plan.mode == "whole_subject":
+            return AttributionIdentityVerdict(
+                status="INCONCLUSIVE",
+                reasons=(
+                    AttributionIdentityReason(
+                        code="whole_subject_mode",
+                        surface="comparison_plan",
+                        detail="whole-subject evidence cannot establish identity eligibility",
+                    ),
+                ),
+            )
+        if (
+            baseline.comparison_plan.comparison_plan_digest
+            != candidate.comparison_plan.comparison_plan_digest
+        ):
+            return AttributionIdentityVerdict(
+                status="REJECTED",
+                reasons=(
+                    AttributionIdentityReason(
+                        code="comparison_plan_mismatch",
+                        surface="comparison_plan",
+                        detail="paired subjects bind different plans",
+                    ),
+                ),
+            )
+        if baseline.arm != "baseline" or candidate.arm != "candidate":
+            return AttributionIdentityVerdict(
+                status="REJECTED",
+                reasons=(
+                    AttributionIdentityReason(
+                        code="arm_pair_invalid",
+                        surface="arm",
+                        detail="subjects do not occupy their declared pair roles",
+                    ),
+                ),
+            )
+        if (
+            self.claimed_treatment_scope
+            != baseline.comparison_plan.varied_fields
+        ):
+            return AttributionIdentityVerdict(
+                status="REJECTED",
+                reasons=(
+                    AttributionIdentityReason(
+                        code="claim_scope_mismatch",
+                        surface="claimed_treatment_scope",
+                        detail=(
+                            "claim scope must equal the complete varied-field "
+                            "scope"
+                        ),
+                    ),
+                ),
+            )
+
+        for subject in (baseline, candidate):
+            configured = subject.runtime.configured_backend_identity
+            realized = subject.run_observation.realized_backend_identity
+            if (
+                isinstance(configured, KnownIdentity)
+                and isinstance(realized, KnownIdentity)
+                and behavior_key(configured) != behavior_key(realized)
+            ):
+                return AttributionIdentityVerdict(
+                    status="REJECTED",
+                    reasons=(
+                        AttributionIdentityReason(
+                            code="configured_realized_backend_mismatch",
+                            surface="configured_backend_identity",
+                            detail=(
+                                "known configured and realized backend "
+                                "identities differ within an arm"
+                            ),
+                        ),
+                    ),
+                )
+
+        comparison = compare_subjects(baseline, candidate)
+        if comparison.status == "NOT_COMPARABLE":
+            return AttributionIdentityVerdict(
+                status="REJECTED",
+                reasons=(
+                    AttributionIdentityReason(
+                        code="controlled_pair_not_comparable",
+                        surface="pair",
+                        detail="a declared control differs across the pair",
+                    ),
+                ),
+            )
+
+        for subject in (baseline, candidate):
+            material_values = (
+                *runtime_values(subject.runtime).values(),
+                subject.run_observation.realized_backend_identity,
+                subject.population.dataset_population,
+                subject.evaluators.evaluators,
+            )
+            if any(
+                isinstance(value, UnknownIdentity)
+                for value in material_values
+            ):
+                return AttributionIdentityVerdict(
+                    status="INCONCLUSIVE",
+                    reasons=(
+                        AttributionIdentityReason(
+                            code="material_identity_unknown",
+                            surface="pair",
+                            detail=(
+                                "at least one material identity is unknown"
+                            ),
+                        ),
+                    ),
+                )
+        if comparison.status == "INCONCLUSIVE":
+            return AttributionIdentityVerdict(
+                status="INCONCLUSIVE",
+                reasons=(
+                    AttributionIdentityReason(
+                        code="material_identity_unknown",
+                        surface="pair",
+                        detail="the controlled comparison is inconclusive",
+                    ),
+                ),
+            )
+        if any(
+            subject.run_observation.run_bound_backend_evidence is None
+            for subject in (baseline, candidate)
+        ):
+            return AttributionIdentityVerdict(
+                status="INCONCLUSIVE",
+                reasons=(
+                    AttributionIdentityReason(
+                        code="material_identity_unknown",
+                        surface="pair",
+                        detail="exact run-bound backend evidence is absent",
+                    ),
+                ),
+            )
+        return AttributionIdentityVerdict(status="ELIGIBLE")

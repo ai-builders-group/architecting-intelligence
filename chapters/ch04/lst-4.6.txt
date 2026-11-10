@@ -1,0 +1,258 @@
+# chapters/ch04/lst-4.6.txt
+from typing import Annotated, Optional
+from pydantic import BaseModel, Field
+from enum import Enum
+from datetime import datetime, timedelta
+import structlog
+
+from .router import ComplexityRouter
+from .schemas import TierLevel, TriageDecision
+from .telemetry import TelemetryEmitter
+
+logger = structlog.get_logger()
+
+class CircuitState(str, Enum):
+    """Circuit breaker states following the classic pattern."""
+    CLOSED = "closed"      # Normal operation
+    OPEN = "open"          # Failures detected, all requests fail-safe
+    HALF_OPEN = "half_open"  # Testing if the issue is resolved
+
+class FallbackExecutor:
+    """
+    Production-grade executor implementing confidence-based fallbacks
+    with circuit breaker protection and comprehensive telemetry.
+    """
+    
+    def __init__(
+        self, 
+        router: ComplexityRouter, 
+        endpoints: dict[TierLevel, tuple[str, str]],
+        confidence_threshold: float = 0.85,
+        telemetry: Optional[TelemetryEmitter] = None
+    ):
+        """
+        Args:
+            router: The distilled complexity classifier (from Section 3.4).
+            endpoints: (provider, model) that serves each tier; breakers key on it.
+            confidence_threshold: The γ threshold for confidence gating.
+            telemetry: Optional telemetry emitter for observability.
+        """
+        self.router = router
+        self.threshold = confidence_threshold
+        self.fallback_tier = TierLevel.REASONER
+        self.telemetry = telemetry or TelemetryEmitter()
+        
+        # One breaker per (provider, model), shared by the tiers that use it
+        self.endpoints = endpoints
+        self.circuit_breakers = {
+            ep: CircuitBreaker() for ep in set(endpoints.values())
+        }
+        
+        logger.info(
+            "fallback_executor.initialized",
+            threshold=self.threshold,
+            fallback=self.fallback_tier.name
+        )
+    
+    def resolve_tier(self, prompt: str, request_id: str) -> tuple[TierLevel, dict]:
+        """
+        Determines the appropriate tier with fallback logic and circuit breaker protection.
+        
+        Args:
+            prompt: The sanitized user input.
+            request_id: Unique identifier for request tracing.
+        
+        Returns:
+            Tuple of (selected_tier, metadata) where metadata contains decision reasoning.
+        """
+        start_time = datetime.utcnow()
+        
+        # Step 1: Get router prediction
+        decision: TriageDecision = self.router.route(prompt)
+        
+        metadata = {
+            "request_id": request_id,
+            "predicted_tier": decision.predicted_tier.name,
+            "confidence": decision.confidence,
+            "router_version": decision.classifier_version
+        }
+        
+        # Step 2: Check circuit breaker for predicted tier
+        if not self.breaker_for(decision.predicted_tier).allow_request():
+            logger.warning(
+                "fallback.circuit_open",
+                tier=decision.predicted_tier.name,
+                request_id=request_id
+            )
+            metadata["fallback_reason"] = "circuit_open"
+            metadata["selected_tier"] = self.fallback_tier.name
+            
+            self.telemetry.emit(
+                event="tier_selection",
+                data=metadata,
+                timestamp=start_time
+            )
+            
+            return self.fallback_tier, metadata
+        
+        # Step 3: Confidence-based gating
+        if decision.confidence >= self.threshold:
+            selected_tier = decision.predicted_tier
+            metadata["selection_reason"] = "high_confidence"
+            
+            logger.info(
+                "fallback.arbitrage_success",
+                tier=selected_tier.name,
+                confidence=decision.confidence,
+                request_id=request_id
+            )
+        else:
+            selected_tier = self.fallback_tier
+            metadata["selection_reason"] = "low_confidence"
+            metadata["fallback_reason"] = (
+                f"confidence_{decision.confidence:.3f}_below_{self.threshold}")
+            
+            logger.warning(
+                "fallback.confidence_override",
+                predicted=decision.predicted_tier.name,
+                confidence=decision.confidence,
+                threshold=self.threshold,
+                request_id=request_id
+            )
+        
+        metadata["selected_tier"] = selected_tier.name
+        metadata["latency_ms"] = (datetime.utcnow() - start_time).total_seconds() * 1000
+        
+        self.telemetry.emit(
+            event="tier_selection",
+            data=metadata,
+            timestamp=start_time
+        )
+        
+        return selected_tier, metadata
+    
+    def breaker_for(self, tier):
+        """The breaker of the (provider, model) that serves this tier."""
+        return self.circuit_breakers[self.endpoints[tier]]
+    
+    def report_outcome(self, tier: TierLevel, success: bool, request_id: str) -> None:
+        """
+        Report the execution outcome to update circuit breakers and telemetry.
+        
+        Args:
+            tier: The tier that was executed.
+            success: Whether the tier produced a valid, contract-satisfying output.
+            request_id: The request identifier for correlation.
+        """
+        if success:
+            self.breaker_for(tier).record_success()
+            logger.info(
+                "fallback.execution_success",
+                tier=tier.name,
+                request_id=request_id
+            )
+        else:
+            self.breaker_for(tier).record_failure()
+            logger.error(
+                "fallback.execution_failure",
+                tier=tier.name,
+                circuit_state=self.breaker_for(tier).state.value,
+                request_id=request_id
+            )
+        
+        self.telemetry.emit(
+            event="execution_outcome",
+            data={
+                "request_id": request_id,
+                "tier": tier.name,
+                "success": success,
+                "circuit_state": self.breaker_for(tier).state.value
+            }
+        )
+
+class CircuitBreaker:
+    """
+    Implements the circuit breaker pattern to prevent cascading failures.
+    If a tier repeatedly fails validation, we open the circuit and route
+    all traffic to the fallback tier until the failure rate drops.
+    """
+    
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        timeout_seconds: int = 60,
+        half_open_requests: int = 3
+    ):
+        """
+        Args:
+            failure_threshold: Number of consecutive failures before opening circuit.
+            timeout_seconds: How long to wait before attempting half-open state.
+            half_open_requests: Number of test requests in half-open state.
+        """
+        self.failure_threshold = failure_threshold
+        self.timeout = timedelta(seconds=timeout_seconds)
+        self.half_open_requests = half_open_requests
+        
+        self.state = CircuitState.CLOSED
+        self.failure_count = 0
+        self.last_failure_time: Optional[datetime] = None
+        self.half_open_count = 0
+        self._probe_out = False  # a half-open probe is waiting for its outcome
+        
+    def record_success(self) -> None:
+        """Record a successful execution."""
+        if self.state == CircuitState.HALF_OPEN:
+            self.half_open_count += 1
+            self._probe_out = False
+            if self.half_open_count >= self.half_open_requests:
+                logger.info("circuit_breaker.closed", reason="half_open_success")
+                self.state = CircuitState.CLOSED
+                self.failure_count = 0
+                self.half_open_count = 0
+        elif self.state == CircuitState.CLOSED:
+            self.failure_count = max(0, self.failure_count - 1)  # Decay failures
+    
+    def record_failure(self) -> None:
+        """Record a failed execution."""
+        self.failure_count += 1
+        self.last_failure_time = datetime.utcnow()
+        
+        if self.state == CircuitState.HALF_OPEN:
+            logger.warning("circuit_breaker.reopened", reason="half_open_failure")
+            self._probe_out = False
+            self.state = CircuitState.OPEN
+            self.half_open_count = 0
+        elif self.failure_count >= self.failure_threshold:
+            logger.error(
+                "circuit_breaker.opened",
+                failure_count=self.failure_count,
+                threshold=self.failure_threshold
+            )
+            self.state = CircuitState.OPEN
+    
+    def _cool_down(self) -> None:
+        """OPEN becomes HALF_OPEN once the cool-down has passed."""
+        if (self.state == CircuitState.OPEN and self.last_failure_time
+                and datetime.utcnow() - self.last_failure_time > self.timeout):
+            logger.info("circuit_breaker.half_open", reason="timeout_elapsed")
+            self.state = CircuitState.HALF_OPEN
+            self.half_open_count = 0
+            self._probe_out = False
+    
+    def admit_one_probe(self) -> bool:
+        """HALF_OPEN admits one probe at a time, until its outcome is recorded."""
+        if self._probe_out:
+            return False
+        self._probe_out = True
+        return True
+    
+    def allow_request(self):
+        """
+        Determine if a request should be allowed through.
+        Returns False while the circuit is OPEN, triggering immediate fallback;
+        a HALF_OPEN circuit admits one probe at a time.
+        """
+        self._cool_down()
+        if self.state == "half_open":  # set once the cool-down has passed
+            return self.admit_one_probe()
+        return self.state == "closed"

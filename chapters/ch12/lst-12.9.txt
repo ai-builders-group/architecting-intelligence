@@ -1,0 +1,507 @@
+from __future__ import annotations
+from datetime import UTC, datetime
+from enum import StrEnum
+from hashlib import sha256
+from json import dumps
+from typing import Annotated, Literal, Protocol, Self, TypeAlias, TypeVar
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
+NonEmptyText: TypeAlias = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Digest: TypeAlias = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+BasisPoints: TypeAlias = Annotated[int, Field(ge=0, le=10_000)]
+Sequence: TypeAlias = Annotated[int, Field(ge=0)]
+def digest_of(*parts: str) -> str:
+    return sha256(dumps(parts, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
+def model_digest(value: BaseModel) -> str:
+    return sha256(dumps(value.model_dump(mode="json"), ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+def require_aware(moment: datetime) -> None:
+    if moment.tzinfo is None or moment.utcoffset() is None: raise ValueError("timestamps must be timezone-aware")
+EnumT = TypeVar("EnumT", bound=StrEnum)
+def enum_set(values: tuple[EnumT, ...]) -> tuple[EnumT, ...]: return tuple(sorted(set(values), key=lambda value: value.value))
+def text_set(values: tuple[str, ...]) -> tuple[str, ...]: return tuple(sorted({value.strip() for value in values}))
+class FrozenModel(BaseModel): model_config = ConfigDict(extra="forbid", frozen=True)
+class Capability(StrEnum): READ_ONLY = "read_only"; EXTERNAL_EFFECT = "external_effect"; PRIVILEGED_EFFECT = "privileged_effect"
+class Permission(StrEnum): READ = "read"; MUTATE = "mutate"; SEND = "send"; TRANSFER = "transfer"
+class DecisionState(StrEnum): RELEASE = "release"; HOLD = "hold"; ROLLBACK = "rollback"; ABSTAIN_DEGRADE = "abstain_degrade"; ESCALATE = "escalate"; STOP = "stop"
+class PrincipalKind(StrEnum): HUMAN = "human"; WORKLOAD = "workload"; EVALUATOR = "evaluator"; DASHBOARD = "dashboard"
+class HumanRole(StrEnum): RELEASE_OWNER = "release_owner"; INCIDENT_OWNER = "incident_owner"; RISK_OWNER = "risk_owner"; OPERATIONS_OWNER = "operations_owner"
+class EvidenceFreshness(StrEnum): CURRENT = "current"; MISSING = "missing"; EXPIRED = "expired"; UNKNOWN = "unknown"
+class ContainmentStatus(StrEnum): PASS = "pass"; BREACH = "breach"; UNAVAILABLE = "unavailable"
+class PairedQualityStatus(StrEnum): CLEAR = "clear"; REGRESSION = "regression"; INCONCLUSIVE = "inconclusive"; INVALID = "invalid"
+class RollbackStatus(StrEnum): READY = "ready"; UNAVAILABLE = "unavailable"; EXPIRED = "expired"
+class DecisionReason(StrEnum):
+    POLICY_MISMATCH = "policy_mismatch"; VERIFIED_HARM = "verified_harm"; CONTAINMENT_BREACH = "containment_breach"
+    EVIDENCE_UNAVAILABLE = "evidence_unavailable"; EVIDENCE_EXPIRED = "evidence_expired"; PRIOR_LEASE_EXPIRED = "prior_lease_expired"
+    QUALITY_REGRESSION = "quality_regression"; QUALITY_INCONCLUSIVE = "quality_inconclusive"; ROLLBACK_UNREADY = "rollback_unready"; PAIRED_CLEAR = "paired_clear"
+class UnresolvedEvidence(StrEnum): IDENTITY = "identity"; MONITORABILITY = "monitorability"; CALIBRATION = "calibration"; REVIEWER_CAPACITY = "reviewer_capacity"; BUDGET = "budget"; PAIRING = "pairing"; ROLLBACK = "rollback"
+class AcceptanceRadius(FrozenModel):
+    configuration_digest: Digest; population_digest: Digest
+    route_digest: Digest; tool_policy_digest: Digest
+    permission_set_digest: Digest; permissions: Annotated[tuple[Permission, ...], Field(min_length=1)]
+    consequence_scope_digest: Digest; traffic_allocator_digest: Digest; traffic_basis_points: BasisPoints
+    @classmethod
+    def issue(
+        cls, *, configuration_digest: str, population_digest: str, route_digest: str,
+        tool_policy_digest: str, permissions: tuple[Permission, ...],
+        consequence_scope_digest: str, traffic_allocator_digest: str, traffic_basis_points: int,
+    ) -> Self:
+        canonical = enum_set(permissions)
+        return cls(
+            configuration_digest=configuration_digest, population_digest=population_digest, route_digest=route_digest,
+            tool_policy_digest=tool_policy_digest, permission_set_digest=digest_of(*(item.value for item in canonical)),
+            permissions=canonical, consequence_scope_digest=consequence_scope_digest,
+            traffic_allocator_digest=traffic_allocator_digest, traffic_basis_points=traffic_basis_points,
+        )
+    @model_validator(mode="after")
+    def validate_identity(self) -> Self:
+        canonical = enum_set(self.permissions)
+        if self.permissions != canonical: raise ValueError("permissions must be canonical")
+        if self.permission_set_digest != digest_of(*(item.value for item in canonical)): raise ValueError("permission_set_digest does not bind permissions")
+        return self
+    @property
+    def digest(self) -> str: return model_digest(self)
+class AuthorityEnvelope(FrozenModel):
+    capabilities: Annotated[tuple[Capability, ...], Field(min_length=1)]; permissions: Annotated[tuple[Permission, ...], Field(min_length=1)]
+    acceptance_radius_digest: Digest
+    @classmethod
+    def issue(
+        cls, *, capabilities: tuple[Capability, ...], permissions: tuple[Permission, ...], acceptance_radius_digest: str,
+    ) -> Self:
+        return cls(capabilities=enum_set(capabilities), permissions=enum_set(permissions), acceptance_radius_digest=acceptance_radius_digest)
+    @model_validator(mode="after")
+    def validate_sets(self) -> Self:
+        if self.capabilities != enum_set(self.capabilities): raise ValueError("capabilities must be canonical")
+        if self.permissions != enum_set(self.permissions): raise ValueError("permissions must be canonical")
+        return self
+    @property
+    def digest(self) -> str: return model_digest(self)
+class AuthorityLimit(FrozenModel):
+    envelope: AuthorityEnvelope; radius: AcceptanceRadius
+    @model_validator(mode="after")
+    def validate_binding(self) -> Self:
+        if self.envelope.acceptance_radius_digest != self.radius.digest: raise ValueError("envelope does not bind this radius")
+        if self.envelope.permissions != self.radius.permissions: raise ValueError("envelope and radius permissions differ")
+        return self
+    @property
+    def digest(self) -> str: return model_digest(self)
+class AuthorityGrant(FrozenModel):
+    limit: AuthorityLimit; lease_not_after: AwareDatetime
+    @property
+    def digest(self) -> str: return model_digest(self)
+class DecisionAuthorization(FrozenModel):
+    disposition: DecisionState; authorized_owner_ids: Annotated[tuple[NonEmptyText, ...], Field(min_length=1)]; required_roles: Annotated[tuple[HumanRole, ...], Field(min_length=1)]
+    @classmethod
+    def issue(
+        cls, *, disposition: DecisionState, authorized_owner_ids: tuple[str, ...], required_roles: tuple[HumanRole, ...],
+    ) -> Self:
+        return cls(disposition=disposition, authorized_owner_ids=text_set(authorized_owner_ids), required_roles=enum_set(required_roles))
+    @model_validator(mode="after")
+    def validate_authority(self) -> Self:
+        if self.authorized_owner_ids != text_set(self.authorized_owner_ids): raise ValueError("owner identities must be canonical")
+        if self.required_roles != enum_set(self.required_roles): raise ValueError("roles must be canonical")
+        return self
+    @property
+    def digest(self) -> str: return model_digest(self)
+class EvaluationBinding(FrozenModel):
+    candidate_subject_digest: Digest; baseline_subject_digest: Digest; evaluated_radius: AcceptanceRadius; paired_rule_digest: Digest
+    containment_contract_digest: Digest; monitorability_contract_digest: Digest
+    calibration_contract_digest: Digest; reviewer_capacity_contract_digest: Digest
+    budget_contract_digest: Digest; rollback_readiness_contract_digest: Digest
+    rollback_configuration_digest: Digest; fallback_configuration_digest: Digest
+    @property
+    def digest(self) -> str: return model_digest(self)
+class RollbackReadiness(FrozenModel):
+    rollback_configuration_digest: Digest; fallback_configuration_digest: Digest
+    accepted_recovery_receipt_digest: Digest; restore_probe_receipt_digest: Digest
+    readiness_contract_digest: Digest; status: RollbackStatus
+    valid_until: AwareDatetime; retained_until: AwareDatetime
+    @model_validator(mode="after")
+    def validate_windows(self) -> Self:
+        if self.rollback_configuration_digest == self.fallback_configuration_digest: raise ValueError("rollback requires a distinct fallback")
+        if self.retained_until < self.valid_until: raise ValueError("retention ends before readiness")
+        return self
+    @property
+    def digest(self) -> str: return model_digest(self)
+class NoVerifiedHarm(FrozenModel): kind: Literal["none"] = "none"
+class VerifiedHarm(FrozenModel):
+    kind: Literal["verified_harm"] = "verified_harm"; effect_oracle_digest: Digest
+    adverse_event_digest: Digest
+AdverseCondition: TypeAlias = Annotated[NoVerifiedHarm | VerifiedHarm, Field(discriminator="kind")]
+class EvidenceBundle(FrozenModel):
+    policy_digest: Digest; binding: EvaluationBinding
+    paired_result_digest: Digest; containment_result_digest: Digest
+    monitorability_result_digest: Digest; calibration_receipt_digest: Digest
+    reviewer_capacity_receipt_digest: Digest; budget_receipt_digest: Digest
+    rollback_readiness: RollbackReadiness; rollback_readiness_digest: Digest
+    containment: ContainmentStatus; monitorability: EvidenceFreshness; calibration: EvidenceFreshness
+    reviewer_capacity: EvidenceFreshness; budget: EvidenceFreshness; pairing: EvidenceFreshness
+    quality: PairedQualityStatus; valid_until: AwareDatetime
+    adverse_condition: AdverseCondition; unresolved: tuple[UnresolvedEvidence, ...] = ()
+    @model_validator(mode="after")
+    def validate_evidence_identity(self) -> Self:
+        if self.rollback_readiness_digest != self.rollback_readiness.digest: raise ValueError("rollback readiness digest is incomplete")
+        if self.unresolved != enum_set(self.unresolved): raise ValueError("unresolved evidence must be canonical")
+        return self
+    @property
+    def digest(self) -> str: return model_digest(self)
+class ReleaseGate(FrozenModel):
+    binding: EvaluationBinding; allowed_next: AuthorityLimit
+    degraded: AuthorityLimit; allow_capability_narrowing: bool
+    containment_breach_disposition: DecisionState; verified_harm_disposition: DecisionState
+    uncertain_quality_disposition: DecisionState; authorizations: Annotated[tuple[DecisionAuthorization, ...], Field(min_length=6)]
+    @model_validator(mode="after")
+    def validate_preregistered_policy(self) -> Self:
+        if self.allowed_next.radius.digest != self.binding.evaluated_radius.digest: raise ValueError("next envelope exceeds the evaluated radius")
+        if self.degraded.envelope.capabilities != (Capability.READ_ONLY,): raise ValueError("degraded capability must be exactly READ_ONLY")
+        if self.degraded.envelope.permissions != (Permission.READ,): raise ValueError("degraded permission must be exactly READ")
+        permission_fields = {"permissions", "permission_set_digest"}
+        if self.degraded.radius.model_dump(exclude=permission_fields) != self.binding.evaluated_radius.model_dump(exclude=permission_fields): raise ValueError("degraded radius changes an unevaluated dimension")
+        if not set(self.degraded.radius.permissions).issubset(self.binding.evaluated_radius.permissions): raise ValueError("degraded radius introduces an unevaluated permission")
+        if self.containment_breach_disposition not in {DecisionState.ROLLBACK, DecisionState.STOP}: raise ValueError("containment must roll back or stop")
+        if self.verified_harm_disposition not in {DecisionState.ROLLBACK, DecisionState.STOP}: raise ValueError("verified harm must roll back or stop")
+        if self.uncertain_quality_disposition not in {DecisionState.HOLD, DecisionState.ESCALATE}: raise ValueError("quality uncertainty must hold or escalate")
+        canonical = tuple(sorted(self.authorizations, key=lambda item: item.disposition.value))
+        if self.authorizations != canonical: raise ValueError("authorizations must be canonical")
+        if len(self.authorizations) != len(DecisionState) or {item.disposition for item in self.authorizations} != set(DecisionState): raise ValueError("every disposition needs one authorization")
+        return self
+    @property
+    def digest(self) -> str: return model_digest(self)
+class AuthenticatedPrincipal(FrozenModel):
+    subject_id: NonEmptyText; principal_kind: PrincipalKind; roles: Annotated[tuple[HumanRole, ...], Field(min_length=1)]
+    iam_authentication_receipt_digest: Digest; valid_until: AwareDatetime
+    @model_validator(mode="after")
+    def validate_roles(self) -> Self:
+        if self.roles != enum_set(self.roles): raise ValueError("principal roles must be canonical")
+        return self
+class SignedDecisionRequest(FrozenModel):
+    owner_subject_id: NonEmptyText; policy_digest: Digest
+    binding_digest: Digest; evaluated_radius_digest: Digest
+    evidence_bundle_digest: Digest; prior_state_digest: Digest
+    requested_disposition: DecisionState; expected_limit_digest: Digest
+    requested_grant: AuthorityGrant | None
+    issued_at: AwareDatetime; valid_until: AwareDatetime
+    idempotency_key: NonEmptyText; signing_key_id: NonEmptyText; signature: NonEmptyText
+    @model_validator(mode="after")
+    def validate_window(self) -> Self:
+        if self.valid_until <= self.issued_at: raise ValueError("request expiry must follow issuance")
+        if (self.requested_disposition is DecisionState.RELEASE) != (self.requested_grant is not None): raise ValueError("only RELEASE binds an exact grant")
+        if self.requested_grant is not None and self.expected_limit_digest != self.requested_grant.limit.digest: raise ValueError("expected limit does not bind requested grant")
+        return self
+    @property
+    def signing_payload_digest(self) -> str:
+        return digest_of(
+            self.owner_subject_id, self.policy_digest,
+            self.binding_digest, self.evaluated_radius_digest,
+            self.evidence_bundle_digest, self.prior_state_digest,
+            self.requested_disposition.value, self.expected_limit_digest,
+            self.requested_grant.digest if self.requested_grant else "no_release_grant",
+            self.issued_at.isoformat(), self.valid_until.isoformat(),
+            self.idempotency_key, self.signing_key_id,
+        )
+    @property
+    def digest(self) -> str:
+        return digest_of(self.signing_payload_digest, self.signature)
+class AuthorityState(FrozenModel):
+    sequence: Sequence; revocation_epoch: Sequence; active_receipt_digest: Digest
+    active_grant: AuthorityGrant
+    @property
+    def digest(self) -> str: return model_digest(self)
+class DecisionPlan(FrozenModel):
+    disposition: DecisionState; resulting_grant: AuthorityGrant
+    operator_page_requested: bool; reasons: Annotated[tuple[DecisionReason, ...], Field(min_length=1)]
+    rollback_configuration_digest: Digest | None = None
+    fallback_configuration_digest: Digest | None = None
+    @model_validator(mode="after")
+    def validate_reasons(self) -> Self:
+        if self.reasons != enum_set(self.reasons): raise ValueError("reasons must be canonical")
+        return self
+class DecisionCommand(FrozenModel):
+    expected_prior_state_digest: Digest
+    expected_sequence: Sequence
+    expected_revocation_epoch: Sequence
+    policy_digest: Digest; binding_digest: Digest
+    evaluated_radius_digest: Digest; evidence_bundle_digest: Digest
+    owner_subject_id: NonEmptyText; request_digest: Digest
+    disposition: DecisionState
+    resulting_grant: AuthorityGrant
+    resulting_revocation_epoch: Sequence
+    operator_page_requested: bool; reasons: tuple[DecisionReason, ...]
+    outcome_correlation_id: NonEmptyText; idempotency_key: NonEmptyText
+    rollback_configuration_digest: Digest | None = None
+    fallback_configuration_digest: Digest | None = None
+    @property
+    def digest(self) -> str: return model_digest(self)
+class DecisionReceipt(FrozenModel):
+    sequence: Sequence; prior_receipt_digest: Digest
+    command: DecisionCommand; issued_at: AwareDatetime
+    authority_store_key_id: NonEmptyText; store_signature: NonEmptyText
+    @property
+    def digest(self) -> str: return model_digest(self)
+class ContainmentCommand(FrozenModel):
+    expected_prior_state_digest: Digest
+    expected_sequence: Sequence
+    expected_revocation_epoch: Sequence
+    policy_digest: Digest
+    evidence_bundle_digest: Digest
+    resulting_grant: AuthorityGrant
+    resulting_revocation_epoch: Sequence
+    reason: DecisionReason
+    observed_at: AwareDatetime
+    outcome_correlation_id: NonEmptyText
+class ContainmentReceipt(FrozenModel):
+    sequence: Sequence; prior_receipt_digest: Digest; command: ContainmentCommand
+    issued_at: AwareDatetime
+    authority_store_key_id: NonEmptyText
+    store_signature: NonEmptyText
+    @property
+    def digest(self) -> str: return model_digest(self)
+class AuthenticatedEffectContext(FrozenModel):
+    action_digest: Digest; capability: Capability; permission: Permission
+    runtime_radius: AcceptanceRadius; traffic_admission_receipt_digest: Digest
+    authority_receipt_digest: Digest
+    revocation_epoch: Sequence
+    boundary_attestation_digest: Digest
+class EnforcementAcknowledgement(FrozenModel):
+    outcome_correlation_id: NonEmptyText; breach_observed_at: AwareDatetime
+    denial_effective_at: AwareDatetime; required_by: AwareDatetime
+    resulting_revocation_epoch: Sequence; enforced: bool
+    @property
+    def digest(self) -> str: return model_digest(self)
+class AuthorizationRejected(ValueError):
+    pass
+class TrustedAuthorityBoundary(Protocol):
+    def decision_time(self) -> datetime: ...
+    def verify_preregistered_policy(
+        self, gate: ReleaseGate, now: datetime) -> None: ...
+    def verify_principal(
+        self, principal: AuthenticatedPrincipal, now: datetime) -> None: ...
+    def verify_evidence_bundle(
+        self, evidence: EvidenceBundle, gate: ReleaseGate, now: datetime
+    ) -> None: ...
+    def verify_containment_breach(
+        self, evidence: EvidenceBundle, gate: ReleaseGate, now: datetime
+    ) -> None: ...
+    def verify_request(
+        self, request: SignedDecisionRequest, principal: AuthenticatedPrincipal,
+        gate: ReleaseGate, evidence: EvidenceBundle, prior_state: AuthorityState,
+        now: datetime,
+    ) -> None: ...
+class AuthorityStore(Protocol):
+    def compare_and_set(self, command: DecisionCommand, /) -> DecisionReceipt: ...
+    def compare_and_revoke(
+        self, command: ContainmentCommand, /) -> ContainmentReceipt: ...
+class AuthorityEnforcementLayer(Protocol):
+    def install(self, receipt: DecisionReceipt, /) -> None: ...
+    def install_denial(
+        self, receipt: ContainmentReceipt, *, required_by: datetime
+    ) -> EnforcementAcknowledgement: ...
+    def authorize_effect(
+        self,
+        context: AuthenticatedEffectContext,
+        active_state: AuthorityState,
+        now: datetime,
+    ) -> None: ...
+def evidence_matches_gate(gate: ReleaseGate, evidence: EvidenceBundle) -> bool:
+    readiness = evidence.rollback_readiness
+    return (
+        evidence.policy_digest == gate.digest
+        and evidence.binding.digest == gate.binding.digest
+        and readiness.rollback_configuration_digest == gate.binding.rollback_configuration_digest
+        and readiness.fallback_configuration_digest == gate.binding.fallback_configuration_digest
+        and readiness.readiness_contract_digest == gate.binding.rollback_readiness_contract_digest
+        and evidence.rollback_readiness_digest == readiness.digest
+    )
+def rollback_is_ready(gate: ReleaseGate, evidence: EvidenceBundle, lease_not_after: datetime, now: datetime) -> bool:
+    readiness = evidence.rollback_readiness
+    return (
+        readiness.status is RollbackStatus.READY
+        and readiness.valid_until > now
+        and lease_not_after <= readiness.valid_until
+        and lease_not_after < readiness.retained_until
+        and readiness.rollback_configuration_digest == gate.binding.rollback_configuration_digest
+        and readiness.fallback_configuration_digest == gate.binding.fallback_configuration_digest
+        and readiness.readiness_contract_digest == gate.binding.rollback_readiness_contract_digest
+        and evidence.rollback_readiness_digest == readiness.digest
+    )
+def grant_within(gate: ReleaseGate, requested: AuthorityGrant) -> bool:
+    radius = requested.limit.radius
+    if radius.digest != gate.binding.evaluated_radius.digest: return False
+    if gate.allowed_next.radius.digest != gate.binding.evaluated_radius.digest: return False
+    requested_capabilities = set(requested.limit.envelope.capabilities)
+    allowed_capabilities = set(gate.allowed_next.envelope.capabilities)
+    return requested_capabilities.issubset(allowed_capabilities) if gate.allow_capability_narrowing else requested_capabilities == allowed_capabilities
+def evidence_is_current(evidence: EvidenceBundle, now: datetime) -> bool:
+    freshness = (evidence.monitorability, evidence.calibration, evidence.reviewer_capacity, evidence.budget, evidence.pairing)
+    return evidence.valid_until > now and evidence.containment is ContainmentStatus.PASS and all(item is EvidenceFreshness.CURRENT for item in freshness) and not evidence.unresolved
+def degraded_grant(gate: ReleaseGate, now: datetime) -> AuthorityGrant:
+    return AuthorityGrant(limit=gate.degraded, lease_not_after=now)
+def make_plan(
+    *, disposition: DecisionState, grant: AuthorityGrant, reason: DecisionReason, page: bool = False, rollback: str | None = None, fallback: str | None = None,
+) -> DecisionPlan:
+    return DecisionPlan(disposition=disposition, resulting_grant=grant, operator_page_requested=page, reasons=(reason,), rollback_configuration_digest=rollback, fallback_configuration_digest=fallback)
+def emergency_plan(
+    gate: ReleaseGate, evidence: EvidenceBundle, *, response: DecisionState, reason: DecisionReason, page: bool, now: datetime,
+) -> DecisionPlan:
+    if response is DecisionState.ROLLBACK and rollback_is_ready(gate, evidence, now, now):
+        return make_plan(disposition=DecisionState.ROLLBACK, grant=degraded_grant(gate, now), reason=reason, page=page, rollback=gate.binding.rollback_configuration_digest, fallback=gate.binding.fallback_configuration_digest)
+    return make_plan(disposition=DecisionState.STOP, grant=degraded_grant(gate, now), reason=reason, page=page)
+def classify(
+    gate: ReleaseGate, evidence: EvidenceBundle, prior_state: AuthorityState,
+    requested_grant: AuthorityGrant | None, *, now: datetime,
+) -> DecisionPlan:
+    if not evidence_matches_gate(gate, evidence):
+        return make_plan(disposition=DecisionState.ABSTAIN_DEGRADE, grant=degraded_grant(gate, now), reason=DecisionReason.POLICY_MISMATCH)
+    if isinstance(evidence.adverse_condition, VerifiedHarm):
+        return emergency_plan(gate, evidence, response=gate.verified_harm_disposition, reason=DecisionReason.VERIFIED_HARM, page=True, now=now)
+    if evidence.containment is ContainmentStatus.BREACH:
+        return emergency_plan(gate, evidence, response=gate.containment_breach_disposition, reason=DecisionReason.CONTAINMENT_BREACH, page=False, now=now)
+    if not evidence_is_current(evidence, now):
+        reason = DecisionReason.EVIDENCE_EXPIRED if evidence.valid_until <= now else DecisionReason.EVIDENCE_UNAVAILABLE
+        return make_plan(disposition=DecisionState.ABSTAIN_DEGRADE, grant=degraded_grant(gate, now), reason=reason)
+    if evidence.quality is not PairedQualityStatus.CLEAR:
+        if prior_state.active_grant.lease_not_after <= now:
+            return make_plan(disposition=DecisionState.ABSTAIN_DEGRADE, grant=degraded_grant(gate, now), reason=DecisionReason.PRIOR_LEASE_EXPIRED)
+        reason = DecisionReason.QUALITY_REGRESSION if evidence.quality is PairedQualityStatus.REGRESSION else DecisionReason.QUALITY_INCONCLUSIVE
+        return make_plan(disposition=gate.uncertain_quality_disposition, grant=prior_state.active_grant, reason=reason)
+    if requested_grant is None:
+        raise AuthorizationRejected("clear evidence requires an exact release grant")
+    if requested_grant.lease_not_after <= now:
+        raise AuthorizationRejected("release lease must extend beyond decision time")
+    if requested_grant.lease_not_after > evidence.valid_until:
+        raise AuthorizationRejected("release lease exceeds evidence validity")
+    if not rollback_is_ready(gate, evidence, requested_grant.lease_not_after, now):
+        return make_plan(disposition=DecisionState.ABSTAIN_DEGRADE, grant=degraded_grant(gate, now), reason=DecisionReason.ROLLBACK_UNREADY)
+    if not grant_within(gate, requested_grant):
+        raise AuthorizationRejected("requested grant exceeds evaluated radius")
+    return make_plan(disposition=DecisionState.RELEASE, grant=requested_grant, reason=DecisionReason.PAIRED_CLEAR)
+def assert_human_authority(
+    gate: ReleaseGate, principal: AuthenticatedPrincipal,
+    disposition: DecisionState, now: datetime,
+) -> None:
+    if principal.principal_kind is not PrincipalKind.HUMAN:
+        raise AuthorizationRejected(
+            "instrument identities cannot issue decisions")
+    if principal.valid_until <= now:
+        raise AuthorizationRejected("authenticated principal has expired")
+    authorization = next(
+        (item for item in gate.authorizations if item.disposition is disposition),
+        None,
+    )
+    if (
+        authorization is None
+        or principal.subject_id not in authorization.authorized_owner_ids
+    ):
+        raise AuthorizationRejected(
+            "principal is not listed for this disposition")
+    if not set(authorization.required_roles).issubset(set(principal.roles)):
+        raise AuthorizationRejected("principal lacks the required role")
+def assert_request_bound(
+    request: SignedDecisionRequest, principal: AuthenticatedPrincipal,
+    gate: ReleaseGate, evidence: EvidenceBundle, prior_state: AuthorityState,
+    now: datetime,
+) -> None:
+    if request.issued_at > now or request.valid_until <= now:
+        raise AuthorizationRejected("request is not currently valid")
+    if (
+        request.owner_subject_id != principal.subject_id
+        or request.policy_digest != gate.digest
+        or request.binding_digest != gate.binding.digest
+        or request.evaluated_radius_digest != gate.binding.evaluated_radius.digest
+        or request.evidence_bundle_digest != evidence.digest
+        or request.prior_state_digest != prior_state.digest
+    ):
+        raise AuthorizationRejected("request does not bind this decision")
+    if (
+        request.requested_grant is not None
+        and request.requested_grant.limit.radius.digest
+        != request.evaluated_radius_digest
+    ):
+        raise AuthorizationRejected("release request exceeds evaluated radius")
+def assert_effect_authorized(
+    context: AuthenticatedEffectContext,
+    active_state: AuthorityState,
+    now: datetime,
+) -> None:
+    require_aware(now); grant = active_state.active_grant
+    if (
+        context.authority_receipt_digest != active_state.active_receipt_digest
+        or context.revocation_epoch != active_state.revocation_epoch
+    ):
+        raise AuthorizationRejected("effect context is stale")
+    if (
+        grant.lease_not_after <= now
+        or context.runtime_radius.digest != grant.limit.radius.digest
+    ):
+        raise AuthorizationRejected("effect exceeds active radius")
+    if (
+        context.capability not in grant.limit.envelope.capabilities
+        or context.permission not in grant.limit.envelope.permissions
+    ):
+        raise AuthorizationRejected("effect exceeds active authority")
+def contain_breach(
+    *, gate: ReleaseGate, evidence: EvidenceBundle, prior_state: AuthorityState,
+    verifier: TrustedAuthorityBoundary, outcome_correlation_id: NonEmptyText,
+) -> ContainmentCommand:
+    now = verifier.decision_time(); require_aware(now)
+    verifier.verify_preregistered_policy(gate, now)
+    verifier.verify_containment_breach(evidence, gate, now)
+    if evidence.containment is not ContainmentStatus.BREACH:
+        raise AuthorizationRejected(
+            "denial transition requires an authenticated breach")
+    return ContainmentCommand(
+        expected_prior_state_digest=prior_state.digest,
+        expected_sequence=prior_state.sequence,
+        expected_revocation_epoch=prior_state.revocation_epoch,
+        policy_digest=gate.digest,
+        evidence_bundle_digest=evidence.digest,
+        resulting_grant=degraded_grant(gate, now),
+        resulting_revocation_epoch=prior_state.revocation_epoch + 1,
+        reason=DecisionReason.CONTAINMENT_BREACH, observed_at=now,
+        outcome_correlation_id=outcome_correlation_id,
+    )
+def decide_release(
+    *, gate: ReleaseGate, evidence: EvidenceBundle, prior_state: AuthorityState,
+    principal: AuthenticatedPrincipal, request: SignedDecisionRequest,
+    verifier: TrustedAuthorityBoundary,
+    outcome_correlation_id: NonEmptyText,
+) -> DecisionCommand:
+    """Return a command for durable compare-and-set; never mutate authority."""
+    now = verifier.decision_time(); require_aware(now)
+    verifier.verify_preregistered_policy(gate, now)
+    verifier.verify_evidence_bundle(evidence, gate, now)
+    verifier.verify_principal(principal, now)
+    assert_request_bound(request, principal, gate, evidence, prior_state, now)
+    verifier.verify_request(request, principal, gate, evidence, prior_state, now)
+    plan = classify(gate, evidence, prior_state, request.requested_grant, now=now)
+    assert_human_authority(gate, principal, plan.disposition, now)
+    if request.requested_disposition != plan.disposition:
+        raise AuthorizationRejected("signed disposition differs from policy")
+    if plan.disposition is DecisionState.RELEASE:
+        if (
+            request.requested_grant is None
+            or request.requested_grant.digest != plan.resulting_grant.digest
+        ):
+            raise AuthorizationRejected(
+                "signed release grant differs from policy")
+    elif request.expected_limit_digest != plan.resulting_grant.limit.digest:
+        raise AuthorizationRejected(
+            "signed non-release limit differs from policy")
+    revoking = plan.disposition in {
+        DecisionState.ROLLBACK, DecisionState.ABSTAIN_DEGRADE, DecisionState.STOP}
+    next_epoch = prior_state.revocation_epoch + int(revoking)
+    return DecisionCommand(
+        expected_prior_state_digest=prior_state.digest,
+        expected_sequence=prior_state.sequence,
+        expected_revocation_epoch=prior_state.revocation_epoch,
+        policy_digest=gate.digest, binding_digest=gate.binding.digest,
+        evaluated_radius_digest=gate.binding.evaluated_radius.digest,
+        evidence_bundle_digest=evidence.digest,
+        owner_subject_id=principal.subject_id, request_digest=request.digest,
+        disposition=plan.disposition, resulting_grant=plan.resulting_grant,
+        resulting_revocation_epoch=next_epoch,
+        operator_page_requested=plan.operator_page_requested,
+        reasons=plan.reasons,
+        outcome_correlation_id=outcome_correlation_id,
+        idempotency_key=request.idempotency_key,
+        rollback_configuration_digest=plan.rollback_configuration_digest,
+        fallback_configuration_digest=plan.fallback_configuration_digest,
+    )

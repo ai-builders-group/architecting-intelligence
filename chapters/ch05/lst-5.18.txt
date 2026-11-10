@@ -1,0 +1,51 @@
+-- src/04_probabilistic_state_machine/migrations/001_checkpoints.sql
+CREATE TABLE IF NOT EXISTS checkpoints (
+    -- Primary Key
+    execution_id UUID PRIMARY KEY,
+    
+    -- Indexing
+    trace_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    -- State Data (JSONB for flexible schema)
+    state JSONB NOT NULL,
+    
+    -- Metadata (denormalized for query performance)
+    current_node TEXT,
+    is_complete BOOLEAN DEFAULT FALSE,
+    requires_human BOOLEAN DEFAULT FALSE,
+    
+    -- Optimistic Locking (prevents lost updates in distributed systems)
+    version INTEGER NOT NULL DEFAULT 1,
+    
+    CONSTRAINT unique_trace_id UNIQUE (trace_id)
+);
+
+-- B-tree indexes on scalar metadata (fast equality/range queries)
+CREATE INDEX idx_checkpoints_trace_id ON checkpoints (trace_id);
+CREATE INDEX idx_checkpoints_updated_at ON checkpoints (updated_at DESC);
+
+-- Partial index for human review queue (highly selective)
+CREATE INDEX idx_checkpoints_requires_human 
+    ON checkpoints (requires_human) 
+    WHERE requires_human = TRUE;
+
+-- **WARNING: GIN Index Trade-offs**
+-- GIN indexes enable rich JSONB queries (e.g., `state->>'scratchpad'->>'risk_score' > 0.8`)
+-- but impose a MASSIVE write penalty. Index maintenance adds 20-100ms to p99 UPSERT latency
+-- for large JSONB blobs (>100KB). Only create this for read-heavy analytical workloads.
+-- 
+-- For write-heavy checkpointing, rely on B-tree indexes on denormalized columns above.
+--
+-- CREATE INDEX idx_checkpoints_state_gin ON checkpoints USING GIN (state);
+
+-- **Partitioning Strategy (Mandatory for >10M checkpoints)**
+-- For high-volume production, partition by created_at (monthly) to:
+-- 1. Keep index sizes manageable (<10GB per partition)
+-- 2. Enable efficient archival (detach old partitions to S3)
+-- 3. Parallelize maintenance (VACUUM, ANALYZE per partition)
+--
+-- Example:
+-- CREATE TABLE checkpoints_2025_02 PARTITION OF checkpoints
+--   FOR VALUES FROM ('2025-02-01') TO ('2025-03-01');

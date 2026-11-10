@@ -1,0 +1,326 @@
+# chapters/ch04/lst-4.8.txt
+import asyncio
+from typing import Annotated, Optional, Callable
+from pydantic import BaseModel, Field
+from enum import Enum
+from datetime import datetime
+import random
+import structlog
+
+from .schemas import TierLevel, AgentOutput
+from .clients import ModelClient
+from .telemetry import TelemetryEmitter
+
+logger = structlog.get_logger()
+
+class FailureType(str, Enum):
+    """Taxonomy of failure modes for telemetry and analysis."""
+    SCHEMA_VIOLATION = "schema_violation"
+    GUARDRAIL_HIT = "guardrail_hit"
+    TIMEOUT = "timeout"
+    API_ERROR = "api_error"
+    VALIDATION_FAILED = "validation_failed"
+    TERMINAL = "terminal"
+
+TRANSIENT_FAILURES = {FailureType.TIMEOUT.value, FailureType.API_ERROR.value}
+
+class ProviderUnavailable(RuntimeError):
+    """Every attempt on a tier was a provider error: do not pay the next tier."""
+
+class EscalationConfig(BaseModel):
+    """Configuration for escalation behavior."""
+    max_retries_per_tier: int = Field(
+        2,
+        description="Maximum retries on the same tier (default 2)."
+    )
+    base_backoff_ms: int = Field(
+        100,
+        description="Base delay for exponential backoff (milliseconds)."
+    )
+    max_backoff_ms: int = Field(
+        5000,
+        description="Maximum backoff delay (milliseconds)."
+    )
+    jitter_ms: int = Field(
+        50,
+        description="Random jitter to add to backoff (milliseconds)."
+    )
+    include_failure_context: bool = Field(
+        True,
+        description="Whether to pass failure history to higher tiers."
+    )
+
+class EscalationLoop:
+    """
+    Implements the retry-with-escalation pattern with exponential backoff,
+    jitter, and comprehensive failure tracking.
+    """
+    
+    def __init__(
+        self,
+        clients: dict[TierLevel, ModelClient],
+        validator: Callable[[AgentOutput], tuple[bool, Optional[FailureType]]],
+        config: EscalationConfig = EscalationConfig(),
+        telemetry: Optional[TelemetryEmitter] = None
+    ):
+        """
+        Args:
+            clients: Dictionary mapping tiers to their model clients.
+            validator: Function that validates outputs and returns (is_valid, failure_type).
+            config: Escalation configuration.
+            telemetry: Optional telemetry emitter.
+        """
+        self.clients = clients
+        self.validator = validator
+        self.config = config
+        self.telemetry = telemetry or TelemetryEmitter()
+        
+        # Escalation cascade: order matters
+        self.cascade = [
+            TierLevel.PROCESSOR,
+            TierLevel.GENERALIST,
+            TierLevel.REASONER
+        ]
+    
+    async def run_with_escalation(
+        self,
+        prompt: str,
+        request_id: str,
+        intent_key: str,
+        initial_tier: Optional[TierLevel] = None
+    ) -> tuple[AgentOutput, dict]:
+        """
+        Attempt execution with automatic escalation on failure.
+        
+        Args:
+            prompt: The user's input.
+            request_id: Unique request identifier.
+            intent_key: Business-intent key under which the validated output commits its effects.
+            initial_tier: Starting tier (if None, starts from PROCESSOR).
+        
+        Returns:
+            Tuple of (output, metadata) with full execution trace.
+        
+        Raises:
+            RuntimeError: If all tiers fail (terminal failure).
+        """
+        start_time = datetime.utcnow()
+        
+        # Determine starting point in cascade
+        if initial_tier is None:
+            start_idx = 0
+        else:
+            try:
+                start_idx = self.cascade.index(initial_tier)
+            except ValueError:
+                logger.warning(
+                    "escalation.invalid_start_tier",
+                    requested=initial_tier.name,
+                    actual=self.cascade[0].name
+                )
+                start_idx = 0
+        
+        failure_history = []
+        total_attempts = 0
+        
+        for tier_idx in range(start_idx, len(self.cascade)):
+            tier = self.cascade[tier_idx]
+            client = self.clients[tier]
+            
+            logger.info(
+                "escalation.attempt",
+                tier=tier.name,
+                attempt=tier_idx - start_idx + 1,
+                request_id=request_id
+            )
+            
+            for retry in range(self.config.max_retries_per_tier):
+                total_attempts += 1
+                
+                # Exponential backoff with jitter (skip for first attempt)
+                if retry > 0:
+                    await self._backoff(retry)
+                
+                try:
+                    # Execute with failure context if enabled
+                    if self.config.include_failure_context and failure_history:
+                        augmented_prompt = self._augment_with_context(
+                            prompt,
+                            failure_history
+                        )
+                    else:
+                        augmented_prompt = prompt
+                    
+                    output = await client.run(
+                        augmented_prompt, request_id=request_id
+                    )
+                    
+                    # Validate output
+                    is_valid, failure_type = self.validator(output)
+                    
+                    if is_valid:
+                        await self.commit_effects(
+                            output, idempotency_key=intent_key)
+                        # Success!
+                        latency_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+                        
+                        metadata = {
+                            "request_id": request_id,
+                            "final_tier": tier.name,
+                            "total_attempts": total_attempts,
+                            "escalation_count": tier_idx - start_idx,
+                            "latency_ms": latency_ms,
+                            "failure_history": [
+                                {"tier": f["tier"], "reason": f["failure_type"]}
+                                for f in failure_history
+                            ]
+                        }
+                        
+                        logger.info(
+                            "escalation.success",
+                            tier=tier.name,
+                            attempts=total_attempts,
+                            latency_ms=latency_ms,
+                            request_id=request_id
+                        )
+                        
+                        self.telemetry.emit(
+                            event="escalation_resolution",
+                            data=metadata,
+                            timestamp=start_time
+                        )
+                        
+                        return output, metadata
+                    
+                    # Validation failed: record and continue
+                    failure_history.append({
+                        "tier": tier.name,
+                        "failure_type": failure_type.value if failure_type else "unknown",
+                        "retry": retry,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    
+                    logger.warning(
+                        "escalation.validation_failed",
+                        tier=tier.name,
+                        failure_type=failure_type.value if failure_type else "unknown",
+                        retry=retry,
+                        request_id=request_id
+                    )
+                    if failure_type not in TRANSIENT_FAILURES:
+                        break  # capability failure: escalate now
+                
+                except asyncio.TimeoutError:
+                    failure_history.append({
+                        "tier": tier.name,
+                        "failure_type": FailureType.TIMEOUT.value,
+                        "retry": retry,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    
+                    logger.error(
+                        "escalation.timeout",
+                        tier=tier.name,
+                        retry=retry,
+                        request_id=request_id
+                    )
+                
+                except Exception as e:
+                    failure_history.append({
+                        "tier": tier.name,
+                        "failure_type": FailureType.API_ERROR.value,
+                        "error": str(e),
+                        "retry": retry,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    
+                    logger.error(
+                        "escalation.exception",
+                        tier=tier.name,
+                        error=str(e),
+                        retry=retry,
+                        request_id=request_id
+                    )
+            
+            # Tier exhausted: log escalation event
+            logger.warning(
+                "escalation.tier_exhausted",
+                tier=tier.name,
+                retries=self.config.max_retries_per_tier,
+                request_id=request_id
+            )
+            
+            own = [f["failure_type"] for f in failure_history
+                   if f["tier"] == tier.name]
+            if own and all(t in TRANSIENT_FAILURES for t in own):
+                raise ProviderUnavailable(tier.name)
+        
+        # All tiers exhausted: terminal failure
+        latency_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+        
+        metadata = {
+            "request_id": request_id,
+            "outcome": "terminal_failure",
+            "total_attempts": total_attempts,
+            "latency_ms": latency_ms,
+            "failure_history": failure_history
+        }
+        
+        logger.error(
+            "escalation.terminal_failure",
+            attempts=total_attempts,
+            cascade_length=len(self.cascade),
+            request_id=request_id
+        )
+        
+        self.telemetry.emit(
+            event="escalation_terminal_failure",
+            data=metadata,
+            timestamp=start_time
+        )
+        
+        raise RuntimeError(
+            f"Terminal Failure: Escalation cascade exhausted after {total_attempts} attempts. "
+            f"Request ID: {request_id}"
+        )
+    
+    async def commit_effects(self, output: AgentOutput, idempotency_key: str) -> None:
+        """Commit the validated output's held effects once, under the business-intent key."""
+        return None
+    
+    async def _backoff(self, attempt: int) -> None:
+        """Implement exponential backoff with jitter."""
+        base_delay_ms = min(
+            2 ** attempt * self.config.base_backoff_ms,
+            self.config.max_backoff_ms
+        )
+        
+        jitter = random.uniform(0, self.config.jitter_ms)
+        delay_ms = base_delay_ms + jitter
+        
+        logger.debug(
+            "escalation.backoff",
+            attempt=attempt,
+            delay_ms=delay_ms
+        )
+        
+        await asyncio.sleep(delay_ms / 1000.0)
+    
+    def _augment_with_context(self, prompt: str, failure_history: list[dict]) -> str:
+        """
+        Augment the prompt with failure context for higher tiers.
+        This helps the more capable model avoid the same mistakes.
+        """
+        if not failure_history:
+            return prompt
+        
+        context = "\n\n# Previous Attempt Context\n"
+        context += "The following tiers have already attempted this task and failed:\n"
+        
+        for failure in failure_history[-3:]:  # Last 3 failures only
+            context += f"- {failure['tier']}: {failure['failure_type']}\n"
+        
+        context += "\nPlease review these failures and ensure your response avoids similar issues.\n"
+        context += "\n# Original Request\n"
+        
+        return context + prompt
