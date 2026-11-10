@@ -1,0 +1,9 @@
+id	chapter	kind	full_path	class
+lst-4.1	04	excerpt	chapters/ch04/one.py	runs
+lst-4.2	04	excerpt	chapters/ch04/two.py	needs-earlier:lst-4.1
+lst-4.3	04	cut	chapters/ch04/three.py	needs-service:toy-api
+lst-4.4	04	cut	chapters/ch04/four.py	sketch
+lst-5.1	05	excerpt	chapters/ch05/one.py	runs
+lst-5.2	05	excerpt	chapters/ch05/two.py	needs-earlier:lst-5.1
+lst-5.3	05	cut	chapters/ch05/three.py	needs-service:toy-api
+lst-5.4	05	cut	chapters/ch05/four.py	sketch

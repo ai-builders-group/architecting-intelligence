@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+# Local evidence is never a public repository input.
+TOOLING_PROOF.md
+.test-work/

@@ -1,0 +1,34 @@
+[project]
+name = "architecting-intelligence-tools"
+version = "0.1.0"
+description = "Offline companion listing checks, tested against toy fixtures"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+check_slice = "companion_tooling.slice:main"
+generate = "companion_tooling.generate:main"
+normalize_headers = "companion_tooling.normalize_headers:main"
+check_pointers = "companion_tooling.pointers:main"
+l0 = "companion_tooling.l0:main"
+
+[tool.setuptools.packages.find]
+include = ["companion_tooling*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "private_gate/tests"]
+pythonpath = ["."]
+addopts = "--basetemp=.test-work"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["companion_tooling"]
+exclude = ["^tests/fixtures/"]

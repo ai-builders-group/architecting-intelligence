@@ -1,0 +1,6 @@
+```python
+# excerpt of lst-5.2
+value = 52
+# ...
+print(value)
+```

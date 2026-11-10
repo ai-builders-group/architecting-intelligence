@@ -1,0 +1,45 @@
+name: Companion checks
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      COMPANION_ROOT: '.'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install check tools
+        run: python -m pip install ruff==0.17.3 mypy==1.19.0
+      - name: L0
+        run: >-
+          python -m companion_tooling l0
+          --inventory "$COMPANION_ROOT/inventory.tsv"
+      - name: check_pointers
+        run: >-
+          python -m companion_tooling check_pointers
+          --inventory "$COMPANION_ROOT/inventory.tsv"
+          --pointers "$COMPANION_ROOT/pointers.txt"
+      - name: Tooling lint and types
+        run: |
+          ruff check companion_tooling
+          mypy companion_tooling
+      - name: Compile chapter Python files
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          files = sorted(Path(os.environ["COMPANION_ROOT"]).glob("chapters/**/*.py"))
+          if not files:
+              raise SystemExit("No chapter Python files to check")
+          subprocess.run([sys.executable, "-m", "py_compile", *map(str, files)], check=True)
+          PY
