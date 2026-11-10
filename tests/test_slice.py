@@ -42,6 +42,10 @@ def test_alignment(excerpt: str, full: str, expected: str) -> None:
     ("code", "full", "expected"),
     [
         ("x = 1  # (1)  \ny = 2\t# (12)", "x = 1\ny = 2\n", "aligned"),
+        ("x = 1\ny = 2", "x = 1  # (1)  \ny = 2\t# (12)\n", "aligned"),
+        ("x = 1  # (12)", "x = 1  # (1)\n", "aligned"),
+        ("x = 1", "x = 1  # (123)\n", "missing"),
+        ("x = 1  # (123)", "x = 1  # (123)\n", "aligned"),
         ("x = 2  # (1)", "x = 1\n", "missing"),
         ("x = 1", "# --8<-- [start:toy]\nx = 1\n# --8<-- [end:toy]\n", "aligned"),
         ("# --8<-- [start:toy]", "# --8<-- [start:toy]\n", "missing"),

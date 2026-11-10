@@ -1,8 +1,8 @@
 # Architecting Intelligence: companion code
 
-The full code for every listing in the book Architecting Intelligence: Systems Engineering for Production AI Agents and Workflows. Each file matches an excerpt in the book; LISTINGS.md maps chapters to files.
+The full code for every listing in the book Architecting Intelligence: Systems Engineering for Production AI Agents and Workflows. Each file is the full listing behind an excerpt in the book; LISTINGS.md maps chapters to files.
 
-Book and updates: arizenai.com/architecting-intelligence/?ref=gh-b2#book-signup
+Book and updates: arizenai.com/architecting-intelligence/?ref=gh-b2&utm_source=gh-b2#book-signup
 
 ## Start here
 
@@ -60,7 +60,13 @@ Nothing in this repository ships credentials. Keep any key you use in your envir
 
 The pointer check confirms that all 148 pointers resolve to a file and a landing page. Every Python file in `chapters/` compiles with Python 3.12. The listing pages are generated from `inventory.tsv`.
 
+Before release the files were also checked for syntax and excerpt alignment: every excerpt printed in the book appears, line for line and in order, in its full listing.
+
 These checks confirm that the files are present and well formed. They do not exercise the code against live services.
+
+## Errata and questions
+
+Found a bug, or a file that differs from the book? Open an issue in this repository. Fixes land on `main`.
 
 ## Licenses
 

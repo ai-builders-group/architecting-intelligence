@@ -1,7 +1,7 @@
 # Companion tooling
 
 Offline Python 3.12 tooling with standard-library runtime dependencies. All bundled
-listings are invented toy fixtures. No manuscript or real listings are included.
+listings are invented toy fixtures. The test fixtures under `tests/` are invented examples.
 
 Run tools without installing the package (replace the input paths for later use):
 
@@ -19,8 +19,8 @@ starting with the header. It strips leading and trailing whitespace and ignores
 blank lines, headers, exact `...` or `# ...` lines and lines starting with
 `# continues`. A first code-line path comment (`# path` or `# path:range`) is
 ignored on either side; it can also precede the excerpt id header.
-Trailing excerpt callouts `# (n)` with one or
-two digits are stripped; full-file comment lines starting with `# --8<--`
+Trailing callouts `# (n)` with one or two digits are stripped on both sides;
+three-digit suffixes remain significant. Full-file comment lines starting with `# --8<--`
 (after optional indentation) are skipped. L0 uses the same alignment rules.
 It prints
 `aligned` (exit 0), `ambiguous` or `missing` (exit 1). Ambiguity means more than
@@ -52,11 +52,6 @@ fixture at `EXCERPTS/lst-N.M.txt`. It requires every excerpt fixture when
 excerpt fixtures for cut rows. Omitting `--excerpts` skips excerpt checks.
 Optional `--denylist PATH` also rejects paths containing a denylist term without
 printing the terms. Without it, the built-in host-specific prefixes still apply.
-
-Publication exports must omit every path listed in `SHIP_EXCLUDE`.
-The private publication scanner and planted-leak tests live in `private_gate/`;
-that directory is excluded from the Python distribution. The shipped `tests/`
-contain only portable toy listings and no planted leaks.
 
 Development checks: `python -m pytest`, `ruff check companion_tooling`, and
 `mypy companion_tooling`. Chapter L1 passes every chapter Python file explicitly

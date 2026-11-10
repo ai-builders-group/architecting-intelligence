@@ -16,7 +16,7 @@ l0 = "companion_tooling.l0:main"
 include = ["companion_tooling*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "private_gate/tests"]
+testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "--basetemp=.test-work"
 

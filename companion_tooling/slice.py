@@ -67,7 +67,7 @@ def check_slice(excerpt: str, full: str) -> str:
         return "missing"
     counts = [1] + [0] * len(wanted)
     for line in without_path_header(full.splitlines()):
-        line = line.strip()
+        line = CALLOUT.sub("", line.strip()).strip()
         if line.startswith("# --8<--") or is_elision(line):
             continue
         for index in range(len(wanted) - 1, -1, -1):
