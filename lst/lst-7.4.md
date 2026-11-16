@@ -1,7 +1,8 @@
-# lst-7.4
+# Human review with backpressure (lst-7.4)
 
-Chapter 07
+Outlines a review node that rejects saturated queues and returns approval, rejection, or timeout responses.
 
-Sketch
-
-[chapters/ch07/lst-7.4.py](../chapters/ch07/lst-7.4.py)
+- **Chapter:** 07
+- **Class:** Sketch
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`)
+- **File:** [chapters/ch07/lst-7.4.py](../chapters/ch07/lst-7.4.py)

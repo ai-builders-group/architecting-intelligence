@@ -1,7 +1,9 @@
-# lst-9.7
+# Adaptive semantic text splitting (lst-9.7)
 
-Chapter 09
+Splits at local minima in sentence embedding similarity and applies recursive splitting when estimated chunk size exceeds a limit.
 
-Runs on its own
-
-[chapters/ch09/lst-9.7.py](../chapters/ch09/lst-9.7.py)
+- **Chapter:** 09
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `langchain`, `numpy`, `pydantic`, `sentence-transformers` (`pip install -r requirements/all.txt`)
+- **Run:** `python chapters/ch09/lst-9.7.py`
+- **File:** [chapters/ch09/lst-9.7.py](../chapters/ch09/lst-9.7.py)

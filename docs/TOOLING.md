@@ -6,11 +6,11 @@ listings are invented toy fixtures. The test fixtures under `tests/` are invente
 Run tools without installing the package (replace the input paths for later use):
 
 ```sh
-python -m companion_tooling check_slice EXCERPT.txt FULL_FILE.py
-python -m companion_tooling generate --inventory tests/fixtures/repo/inventory.tsv
-python -m companion_tooling normalize_headers --inventory tests/fixtures/repo/inventory.tsv
-python -m companion_tooling check_pointers --pointers tests/fixtures/repo/pointers.txt --inventory tests/fixtures/repo/inventory.tsv
-python -m companion_tooling l0 --inventory tests/fixtures/repo/inventory.tsv --excerpts tests/fixtures/repo/excerpts
+PYTHONPATH=tools python -m companion_tooling check_slice EXCERPT.txt FULL_FILE.py
+PYTHONPATH=tools python -m companion_tooling generate --inventory tools/tests/fixtures/repo/inventory.tsv
+PYTHONPATH=tools python -m companion_tooling normalize_headers --inventory tools/tests/fixtures/repo/inventory.tsv
+PYTHONPATH=tools python -m companion_tooling check_pointers --pointers tools/tests/fixtures/repo/pointers.txt --inventory tools/tests/fixtures/repo/inventory.tsv
+PYTHONPATH=tools python -m companion_tooling l0 --inventory tools/tests/fixtures/repo/inventory.tsv --excerpts tools/tests/fixtures/repo/excerpts
 ```
 
 `check_slice` accepts a fenced excerpt with `# excerpt of lst-N.M` as its first
@@ -53,7 +53,7 @@ excerpt fixtures for cut rows. Omitting `--excerpts` skips excerpt checks.
 Optional `--denylist PATH` also rejects paths containing a denylist term without
 printing the terms. Without it, the built-in host-specific prefixes still apply.
 
-Development checks: `python -m pytest`, `ruff check companion_tooling`, and
+Development checks (from `tools/`): `python -m pytest`, `ruff check companion_tooling`, and
 `mypy companion_tooling`. Chapter L1 passes every chapter Python file explicitly
 to `python -m py_compile`. Runtime uses only Python
 3.12's standard library; the three check tools are the only development tools.

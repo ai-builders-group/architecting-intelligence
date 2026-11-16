@@ -1,0 +1,2 @@
+-r core.txt
+temporalio>=1.7

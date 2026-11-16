@@ -1,7 +1,8 @@
-# lst-4.2
+# Confidence-gated tier routing (lst-4.2)
 
-Chapter 04
+Selects a predicted tier or fallback based on confidence, emits telemetry, and tracks calibration error from reported outcomes.
 
-Runs on its own
-
-[chapters/ch04/lst-4.2.txt](../chapters/ch04/lst-4.2.txt)
+- **Chapter:** 04
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+
+- **File:** [chapters/ch04/lst-4.2.txt](../chapters/ch04/lst-4.2.txt)

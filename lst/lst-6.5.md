@@ -1,7 +1,9 @@
-# lst-6.5
+# Transaction approval workflow (lst-6.5)
 
-Chapter 06
+Coordinates risk scoring and model justification through Temporal activities, automatically approving low-risk transactions and waiting for human decisions on higher-risk ones.
 
-Needs service temporal
-
-[chapters/ch06/lst-6.5.py](../chapters/ch06/lst-6.5.py)
+- **Chapter:** 06
+- **Class:** Needs service temporal
+- **Needs:** Python 3.12+; `temporalio` (`pip install -r requirements/temporal.txt`); a Temporal server (see [SERVICES](../docs/SERVICES.md))
+- **Run:** `python chapters/ch06/lst-6.5.py`
+- **File:** [chapters/ch06/lst-6.5.py](../chapters/ch06/lst-6.5.py)

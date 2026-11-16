@@ -1,0 +1,6 @@
+-r core.txt
+redis>=5.0
+aiohttp>=3.10
+aiosmtplib>=3.0
+chromadb>=0.5
+faiss-cpu>=1.8

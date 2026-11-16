@@ -1,7 +1,9 @@
-# lst-5.16
+# Agent state with execution history (lst-5.16)
 
-Chapter 05
+Defines serializable agent state with provenance, node execution records, resource counters, and methods to append, retrieve, and prune history.
 
-Runs on its own
-
-[chapters/ch05/lst-5.16.py](../chapters/ch05/lst-5.16.py)
+- **Chapter:** 05
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`)
+- **Run:** `python chapters/ch05/lst-5.16.py`
+- **File:** [chapters/ch05/lst-5.16.py](../chapters/ch05/lst-5.16.py)

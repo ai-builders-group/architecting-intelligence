@@ -1,7 +1,9 @@
-# lst-6.18
+# Human approval for saga compensation (lst-6.18)
 
-Chapter 06
+Extends saga compensation with high-value approval signals, timeout escalation, continued waiting, and a caller-identifier allowlist.
 
-Needs service temporal
-
-[chapters/ch06/lst-6.18.py](../chapters/ch06/lst-6.18.py)
+- **Chapter:** 06
+- **Class:** Needs service temporal
+- **Needs:** Python 3.12+; a Temporal server (see [SERVICES](../docs/SERVICES.md))
+- **Run:** `python chapters/ch06/lst-6.18.py`
+- **File:** [chapters/ch06/lst-6.18.py](../chapters/ch06/lst-6.18.py)

@@ -1,7 +1,9 @@
-# lst-10.14
+# Hybrid retrieval configuration and result schemas (lst-10.14)
 
-Chapter 10
+Defines validated retrieval thresholds, timeouts, source rankings, and fused results that record dense and sparse scores.
 
-Runs on its own
-
-[chapters/ch10/lst-10.14.py](../chapters/ch10/lst-10.14.py)
+- **Chapter:** 10
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`)
+- **Run:** `python chapters/ch10/lst-10.14.py`
+- **File:** [chapters/ch10/lst-10.14.py](../chapters/ch10/lst-10.14.py)

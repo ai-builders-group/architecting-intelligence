@@ -1,7 +1,9 @@
-# lst-10.3
+# Dense retrieval with parent expansion (lst-10.3)
 
-Chapter 10
+Queries tenant-scoped vectors with optional metadata filters, expands matching chunks into parent documents, and uses a placeholder embedding function.
 
-Needs service postgresql-pgvector
-
-[chapters/ch10/lst-10.3.py](../chapters/ch10/lst-10.3.py)
+- **Chapter:** 10
+- **Class:** Needs service postgresql-pgvector
+- **Needs:** Python 3.12+; `asyncpg` (`pip install -r requirements/postgres.txt`); PostgreSQL with pgvector (see [SERVICES](../docs/SERVICES.md))
+- **Run:** `python chapters/ch10/lst-10.3.py`
+- **File:** [chapters/ch10/lst-10.3.py](../chapters/ch10/lst-10.3.py)

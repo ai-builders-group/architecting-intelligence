@@ -1,7 +1,9 @@
-# lst-16.10
+# Staged rollout traffic policy (lst-16.10)
 
-Chapter 16
+Configures shadow, canary, and later rollout phases with traffic percentages, minimum durations, sample counts, and metric thresholds.
 
-Runs on its own
-
-[chapters/ch16/lst-16.10.py](../chapters/ch16/lst-16.10.py)
+- **Chapter:** 16
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+
+- **Run:** `python chapters/ch16/lst-16.10.py`
+- **File:** [chapters/ch16/lst-16.10.py](../chapters/ch16/lst-16.10.py)

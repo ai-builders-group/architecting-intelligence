@@ -1,7 +1,9 @@
-# lst-9.36
+# Context strategy cost and consistency models (lst-9.36)
 
-Chapter 09
+Defines pricing, retrieval costs, consistency options, and context strategy metadata with illustrative pricing objects.
 
-Runs on its own
-
-[chapters/ch09/lst-9.36.py](../chapters/ch09/lst-9.36.py)
+- **Chapter:** 09
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`)
+- **Run:** `python chapters/ch09/lst-9.36.py`
+- **File:** [chapters/ch09/lst-9.36.py](../chapters/ch09/lst-9.36.py)

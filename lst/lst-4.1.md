@@ -1,7 +1,8 @@
-# lst-4.1
+# Model resource and routing schemas (lst-4.1)
 
-Chapter 04
+Defines validated model resource profiles and routing decisions with tiers, token costs, latency, capabilities, confidence, and metadata.
 
-Runs on its own
-
-[chapters/ch04/lst-4.1.txt](../chapters/ch04/lst-4.1.txt)
+- **Chapter:** 04
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+
+- **File:** [chapters/ch04/lst-4.1.txt](../chapters/ch04/lst-4.1.txt)

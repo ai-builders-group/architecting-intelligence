@@ -1,7 +1,9 @@
-# lst-15.4
+# Fine-tuning breakeven cost model (lst-15.4)
 
-Chapter 15
+Compares retrieval and fine-tuning costs, including shared GPU reservations and adapter transfer latency, and calculates when breakeven occurs.
 
-Runs on its own
-
-[chapters/ch15/lst-15.4.py](../chapters/ch15/lst-15.4.py)
+- **Chapter:** 15
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`)
+- **Run:** `python chapters/ch15/lst-15.4.py`
+- **File:** [chapters/ch15/lst-15.4.py](../chapters/ch15/lst-15.4.py)

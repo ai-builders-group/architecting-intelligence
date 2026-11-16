@@ -1,7 +1,9 @@
-# lst-6.14
+# Saga orchestration with reverse compensation (lst-6.14)
 
-Chapter 06
+Executes saga activities sequentially, compensates completed and in-flight steps in reverse order after failure, and escalates compensation failures.
 
-Needs service temporal
-
-[chapters/ch06/lst-6.14.py](../chapters/ch06/lst-6.14.py)
+- **Chapter:** 06
+- **Class:** Needs service temporal
+- **Needs:** Python 3.12+; `pydantic`, `structlog`, `temporalio` (`pip install -r requirements/temporal.txt`); a Temporal server (see [SERVICES](../docs/SERVICES.md))
+- **Run:** `python chapters/ch06/lst-6.14.py`
+- **File:** [chapters/ch06/lst-6.14.py](../chapters/ch06/lst-6.14.py)

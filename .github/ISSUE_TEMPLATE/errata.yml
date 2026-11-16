@@ -1,0 +1,41 @@
+name: Errata
+description: Report a difference from the book or a listing that fails.
+labels: [errata]
+body:
+  - type: input
+    id: chapter
+    attributes:
+      label: Chapter
+    validations:
+      required: true
+  - type: input
+    id: listing
+    attributes:
+      label: Listing id
+      placeholder: lst-5.3
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What differs from the book or what fails
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+    validations:
+      required: false
+  - type: textarea
+    id: packages
+    attributes:
+      label: Package versions
+    validations:
+      required: false

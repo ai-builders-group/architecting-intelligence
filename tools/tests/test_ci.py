@@ -7,7 +7,7 @@ from textwrap import dedent
 
 import pytest
 
-WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
 
 
 def test_publication_ci_scope_and_pins() -> None:
@@ -17,6 +17,8 @@ def test_publication_ci_scope_and_pins() -> None:
     assert "mypy companion_tooling\n" in text
     assert "python -m companion_tooling l0" in text
     assert "python -m companion_tooling check_pointers" in text
+    assert "PYTHONPATH: tools" in text and "working-directory: tools" in text
+    assert text.count('--repo "$COMPANION_ROOT"') == 2
     for unwanted in (
         "--excerpts", " generate ", "pytest", "ruff check .", "explicit-package-bases"
     ):

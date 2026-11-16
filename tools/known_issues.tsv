@@ -1,0 +1,2 @@
+id	note
+lst-9.16	fails on current pydantic with a schema error; a fix is planned.

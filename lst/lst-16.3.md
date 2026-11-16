@@ -1,7 +1,9 @@
-# lst-16.3
+# Synthetic training data rejection sampling (lst-16.3)
 
-Chapter 16
+Generates teacher responses, scores candidates with a judge, filters by quality thresholds, and assembles a hashed distillation dataset.
 
-Runs on its own
-
-[chapters/ch16/lst-16.3.py](../chapters/ch16/lst-16.3.py)
+- **Chapter:** 16
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`)
+- **Run:** `python chapters/ch16/lst-16.3.py`
+- **File:** [chapters/ch16/lst-16.3.py](../chapters/ch16/lst-16.3.py)

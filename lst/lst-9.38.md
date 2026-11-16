@@ -1,7 +1,9 @@
-# lst-9.38
+# Merkle corpus and shard versions (lst-9.38)
 
-Chapter 09
+Hashes documents into domain shards and compares versions to identify changed shards for cache invalidation.
 
-Runs on its own
-
-[chapters/ch09/lst-9.38.py](../chapters/ch09/lst-9.38.py)
+- **Chapter:** 09
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`)
+- **Run:** `python chapters/ch09/lst-9.38.py`
+- **File:** [chapters/ch09/lst-9.38.py](../chapters/ch09/lst-9.38.py)

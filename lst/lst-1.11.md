@@ -1,7 +1,9 @@
-# lst-1.11
+# Refund validation and escalation (lst-1.11)
 
-Chapter 01
+Validates refund parameters and checks tool permissions, confidence, refund limits, and a stub policy before returning an action or escalation.
 
-Runs on its own
-
-[chapters/ch01/lst-1.11.py](../chapters/ch01/lst-1.11.py)
+- **Chapter:** 01
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`)
+- **Run:** `python chapters/ch01/lst-1.11.py`
+- **File:** [chapters/ch01/lst-1.11.py](../chapters/ch01/lst-1.11.py)

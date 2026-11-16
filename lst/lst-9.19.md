@@ -1,7 +1,8 @@
-# lst-9.19
+# Context packing by calibrated relevance (lst-9.19)
 
-Chapter 09
+Packs retrieval candidates within a token budget using relevance density, recency boosts, and source diversity penalties.
 
-Needs earlier listing lst-9.18
-
-[chapters/ch09/lst-9.19.py](../chapters/ch09/lst-9.19.py)
+- **Chapter:** 09
+- **Class:** Needs earlier listing lst-9.18
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`); the definitions from [lst-9.18](lst-9.18.md)
+- **File:** [chapters/ch09/lst-9.19.py](../chapters/ch09/lst-9.19.py)

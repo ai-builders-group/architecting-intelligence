@@ -1,0 +1,149 @@
+id	title	what
+lst-1.3	Typed result with reliability checks	Wraps model data with confidence and reasoning traces, and checks reliability against a threshold and forbidden phrases.
+lst-1.5	Semantic similarity assertions	Compares sentence embeddings with cosine similarity and raises an assertion when text similarity falls below a threshold.
+lst-1.8	Validated chatbot input and output	Defines validated chatbot schemas and a stateless agent that returns an echoed message with mock confidence and token usage.
+lst-1.9	Human approval for tool calls	Models proposed tool calls and approval decisions, executing approved calls and checking modified calls for reversibility.
+lst-1.10	Research orchestration with reviewable drafts	Builds a research draft from mock search, document reading, and synthesis steps, recording sources and a reasoning chain.
+lst-1.11	Refund validation and escalation	Validates refund parameters and checks tool permissions, confidence, refund limits, and a stub policy before returning an action or escalation.
+lst-1.12	Bounded tool execution with correction	Retries transient tool errors within a capped attempt budget, records correction steps, and returns success, aborted, or failed-safe status.
+lst-1.14	Session-bound tool allowlist sketch	Outlines allowlisted tool execution that rejects caller-supplied identity fields and supplies tenant and customer identity from the session.
+lst-2.5	Agent contract interface	Defines an abstract agent contract for input schemas, readable context, callable tools, output guardrails, and exit criteria.
+lst-2.10	Refund agent contract sketch	Outlines a refund agent contract with validated request and decision schemas, context access, tools, guardrails, and exit criteria.
+lst-2.18	Agent requirements document template	Outlines an agent requirements document covering identity, goals, budgets, execution paths, escalation, and an input schema.
+lst-2.19	Agent requirements compliance workflow	Outlines pull-request checks for requirements-document coverage, schema validation, and golden-dataset evaluation when prompts or agents change.
+lst-3.13	Reasoning budgets and trace schemas	Defines validated reasoning budgets, verifier results, trace nodes, and execution results for chain-of-thought, tree-of-thoughts, and best-of-N strategies.
+lst-3.14	Reasoning engine with verifier scoring	Implements three reasoning strategies with timeouts, verifier scoring, tree pruning, and cancellation of surplus parallel requests behind a client interface.
+lst-3.15	Stubbed reasoning strategy comparison	Runs a proof query through stubbed reasoning strategies and prints confidence, timing, node counts, pruning, and timeout fields.
+lst-4.1	Model resource and routing schemas	Defines validated model resource profiles and routing decisions with tiers, token costs, latency, capabilities, confidence, and metadata.
+lst-4.2	Confidence-gated tier routing	Selects a predicted tier or fallback based on confidence, emits telemetry, and tracks calibration error from reported outcomes.
+lst-4.4	Net routing benefit calculator	Calculates routing savings, failure penalties, router overhead, and a break-even probability from token costs, latency, and success probabilities.
+lst-4.5	Embedding-based complexity classifier	Classifies prompts into tiers using sentence embeddings and a mock head, applies temperature scaling, monitors calibration, and splits classifier versions by user.
+lst-4.6	Circuit breaker fallback sketch	Outlines confidence-based tier selection with endpoint circuit breakers, cooldown probes, outcome reporting, and telemetry.
+lst-4.7	Speculative tier execution sketch	Outlines parallel tier execution for uncertain, side-effect-free requests, preferring a valid fast result and cancelling remaining tasks.
+lst-4.8	Retry and escalation loop sketch	Outlines tier escalation with validation, transient retries, backoff, failure context, provider-error handling, and a stub for committing effects.
+lst-4.9	Structured intent routing schema	Defines customer-support intent categories, a validated routing result with extracted entities, and a system prompt for classification.
+lst-4.10	Semantic routing with model fallback	Routes queries by embedding similarity to intent anchors, then uses structured model classification and a support fallback for low confidence.
+lst-4.11	Router timeout and fallback sketch	Outlines router timeouts, confidence fallbacks, error-rate circuit opening, and support or human-queue fallback decisions.
+lst-5.2	Graph agent state schemas	Defines graph-agent history, scratchpad, tracing, retry and exit fields, plus contract-analysis entities, risk flags, validation, and summary output.
+lst-5.3	Validation routing with retry limits	Returns extraction-validation updates and routes to analysis, another extraction attempt, or human review based on validation and retry count.
+lst-5.4	Instruction adherence under context pressure	Adds token-counted distractor context, calls a model, and records whether its response includes the injected document citation.
+lst-5.8	Reflection-enhanced agent state	Defines thought steps and agent state for planning, acting, observing, critique, retry tracking, tool results, and resource accounting.
+lst-5.9	Structured critique for agent cycles	Uses a structured model critique to update the latest thought, token and cost totals, and completion or retry state.
+lst-5.10	ReAct graph with bounded retries	Builds and invokes a LangGraph loop with stub nodes, critique-driven completion, retry routing, and a human-escalation branch.
+lst-5.11	Reflection state and critique memory	Defines reflection-loop state with attempt counts, cumulative critiques, a validated result, a human-review flag, and resource totals.
+lst-5.12	Generation using prior critique context	Builds a generation prompt from the task and previous critiques, calls a model, and updates attempts, output, tokens, and cost.
+lst-5.13	Syntax and semantic output evaluation	Checks requested JSON syntax before model-based semantic evaluation, returning critiques and state updates for failures or successful validation.
+lst-5.14	Reflection termination and escalation	Routes reflection state to output, generation, or a dead-letter branch, whose node sets the human-review flag.
+lst-5.15	Reflection graph with critique feedback	Builds a LangGraph generation-and-evaluation loop using stub nodes, accumulated critiques, retry limits, and human escalation.
+lst-5.16	Agent state with execution history	Defines serializable agent state with provenance, node execution records, resource counters, and methods to append, retrieve, and prune history.
+lst-5.17	State reducers for graph updates	Applies state deltas through append or overwrite reducers, copies state before changes, and rejects overwrites of metadata and history.
+lst-5.18	PostgreSQL checkpoint table definition	Defines a JSONB checkpoint table with execution and trace identifiers, versioning, status fields, and indexes for lookup and human review.
+lst-5.19	PostgreSQL checkpointer with optimistic locking	Saves and loads serialized agent state, checks expected versions for concurrent updates, and lists checkpoints awaiting human review.
+lst-6.1	Event payload offloading sketch	Outlines storing small event payloads inline and uploading larger payloads to blob storage with tenant-scoped keys and SHA-256 checksums.
+lst-6.4	Temporal activities for external calls	Defines Temporal activities for model invocation and risk lookup, adding a retry-stable idempotency header to the model request.
+lst-6.5	Transaction approval workflow	Coordinates risk scoring and model justification through Temporal activities, automatically approving low-risk transactions and waiting for human decisions on higher-risk ones.
+lst-6.11	Typed model activity with retries	Defines validated model requests and responses, handles retryable API errors, and uses the activity in a content-moderation workflow.
+lst-6.14	Saga orchestration with reverse compensation	Executes saga activities sequentially, compensates completed and in-flight steps in reverse order after failure, and escalates compensation failures.
+lst-6.15	Flight booking and cancellation activities	Defines Temporal activities that call booking and cancellation endpoints with derived idempotency keys and return booking or refund details.
+lst-6.18	Human approval for saga compensation	Extends saga compensation with high-value approval signals, timeout escalation, continued waiting, and a caller-identifier allowlist.
+lst-7.1	Confidence based escalation policy	Routes proposals to human review when validation, entropy, tool ambiguity, or novelty signals exceed policy limits.
+lst-7.2	Human review admission control	Uses a token bucket to admit low confidence escalations only when review capacity is available.
+lst-7.4	Human review with backpressure	Outlines a review node that rejects saturated queues and returns approval, rejection, or timeout responses.
+lst-7.6	Hashed proposals and approval decisions	Defines frozen proposal components, computes a content hash, and binds approval decisions to that hash.
+lst-7.8	Proposal review interface	Outlines a React interface showing proposed changes, evidence, risk, and approval or rejection buttons.
+lst-7.9	Execution bound to approved proposals	Outlines approval checks that preserve state on rejection, verify proposal hashes, and check state before executing steps.
+lst-7.10	Metric rendering and effect reconciliation	Outlines admission, rendering, approved events, verified local reads, and state reconciliation for metric components.
+lst-7.13	Human proposal and decision schemas	Defines proposal context and human decisions with risk metadata, content hashes, feedback, and optional modifications.
+lst-7.14	Interruptible human approval tool	Requests approval once, suspends pending workflows, validates returned decisions, and rejects proposals when the review deadline expires.
+lst-7.15	Redis storage for human approvals	Stores proposals, pending notifications, and hash bound decisions in Redis with expiration and first write wins behavior.
+lst-7.16	Human approval graph routing	Outlines LangGraph routing through human approval, conditional execution, and PostgreSQL checkpointing.
+lst-7.17	Slack approval request notifier	Posts proposal details and approval or rejection buttons to a Slack webhook.
+lst-7.18	Email approval request notifier	Sends proposal details and a review link through SMTP, explaining that decisions require an authenticated submission.
+lst-7.19	Signed human decision webhook	Outlines a FastAPI endpoint that checks webhook signatures and run ownership before storing decisions and requesting resumption.
+lst-7.20	PostgreSQL checkpoints with resume tokens	Persists workflow snapshots, verifies signed resume tokens, claims resumptions, records results, and removes expired checkpoints.
+lst-7.21	Asynchronous approval and workflow resumption	Outlines checkpoint creation, review notifications, caller authorization, and duplicate handling for a workflow resume endpoint.
+lst-7.22	Synchronous approval with asynchronous fallback	Outlines a human tool that switches to asynchronous approval when the synchronous request returns no response.
+lst-7.23	Approval before each action	Saves the current state through an asynchronous human tool and requests approval for an action plan.
+lst-7.24	Verifier consensus escalation sketch	Outlines parallel verifier voting and escalation thresholds with placeholder model responses and action name comparison.
+lst-7.25	Verification routed through human oversight	Combines verifier consensus, circuit breaker routing, load shedding, autonomous tool execution, and asynchronous human approval requests.
+lst-7.26	Adaptive supervision circuit breaker	Tracks rejection history and review queue depth to change supervision modes and route flagged proposals.
+lst-7.27	Post hoc human audit sampling	Executes tools immediately and samples results for later review, increasing sampling probability for low confidence decisions.
+lst-7.28	Coalesced approval for uncertain steps	Outlines staging a plan, batching uncertain steps for review, and committing only after approval or when no escalation is needed.
+lst-9.1	Visual page complexity routing	Combines a vision classifier with text density and column heuristics to route pages among OCR and vision extraction pipelines.
+lst-9.2	Spatial table extraction schemas	Defines page, table, cell, and bounding box models with numeric parsing, spatial matching, and total verification methods.
+lst-9.3	Cascaded table extraction consensus	Aligns extracted cells spatially, computes weighted consensus, and requests another model when alignment, verification, or confidence gates fail.
+lst-9.4	Table arithmetic verification and escalation	Checks table totals, requests correction for discrepancies, and escalates extraction when verification fails or the cascade used a tiebreaker.
+lst-9.5	Image quality confidence calibration	Measures image quality, applies confidence penalties, and optionally calibrates adjusted scores using logistic or isotonic regression.
+lst-9.7	Adaptive semantic text splitting	Splits at local minima in sentence embedding similarity and applies recursive splitting when estimated chunk size exceeds a limit.
+lst-9.8	Document summaries prepended for embeddings	Generates a document summary, prepends it when embedding each chunk, and stores the original chunk text separately.
+lst-9.9	Late chunking with memory estimates	Estimates attention memory, rejects oversized workloads, and pools contextual token embeddings into text chunks.
+lst-9.10	Chunking strategy selection	Chooses a chunking strategy from document length, domain, importance, cross references, and late chunking availability.
+lst-9.11	Chunk provenance and version compatibility	Records chunking, embedding, and parser versions and checks whether stored chunks match a target configuration.
+lst-9.12	Blue green index migration sketch	Outlines reindexing with a locked parser version, comparing retrieval precision, switching traffic, and retiring the previous index.
+lst-9.13	Partial document update invalidation	Outlines selecting affected chunks from changed lines, with full invalidation for contextual prepending and late chunking.
+lst-9.15	Empirical metadata filter selectivity	Counts individual metadata values and pairwise occurrences to estimate the fraction of documents matching combined filters.
+lst-9.16	Versioned metadata and department mapping	Defines filterable document metadata and maps department names across schema versions to canonical values.
+lst-9.17	Confidence gated metadata filter extraction	Extracts structured filters through an LLM, maps department values, parses dates, and selects hard, soft, or no filtering.
+lst-9.18	Retrieval relevance score calibration	Trains logistic or isotonic calibration on labeled similarities and converts individual or batched scores into relevance probabilities.
+lst-9.19	Context packing by calibrated relevance	Packs retrieval candidates within a token budget using relevance density, recency boosts, and source diversity penalties.
+lst-9.20	Metadata retrieval debugging and correction	Compares filtered and diagnostic searches, identifies mismatched metadata, and records corrections before updating the index.
+lst-9.21	Document lifecycle ingestion events	Defines frozen document events with tenant scope, content, metadata, provenance, and schema version fields.
+lst-9.22	Event driven document embedding processor	Chunks and embeds document events, upserts tenant scoped chunks, removes stale content, and handles deletions and destroyed keys.
+lst-9.23	Event log replay controller	Replays document events, applies tombstones, parks erased records, and stops at the offset of an ordinary processing failure.
+lst-9.24	Ingestion event metrics wrapper	Wraps event processing to report ingestion lag and success or failure counters while preserving raised errors.
+lst-9.25	Merkle tree document delta detection	Compares stored section hashes with new chunks and returns processing, preservation, and deletion groups while updating the stored tree.
+lst-9.27	Redis rate limiting with local fallback	Uses Redis counters for shared limits and a bounded local token bucket when Redis fails, rejecting requests after timeout.
+lst-9.29	Context layers and token budgets	Defines context priorities and token reservations, counts tokens, and checks whether an allocation fits the model window.
+lst-9.30	Dynamic context allocation	Packs retrieval results, history, and scratchpad content by priority and relevance while tracking token utilization and evictions.
+lst-9.31	Conversation storage with cached embeddings	Generates missing embeddings when storing messages and retrieves history scoped by tenant, user, and session.
+lst-9.32	Semantic conversation thread pruning	Groups messages into threads, scores cached embeddings against the current query, and retains relevant threads within a token budget.
+lst-9.33	Offline relevance calibration parameters	Trains logistic or isotonic mappings offline and applies exported parameters at runtime without retraining.
+lst-9.34	Topic shift detection and summarization limits	Compares query and history embeddings to detect topic changes, then queues summaries subject to cooldown and hourly limits.
+lst-9.35	Background conversation summary workflow	Outlines a Temporal workflow that summarizes stored conversation messages with retries and updates the session summary.
+lst-9.36	Context strategy cost and consistency models	Defines pricing, retrieval costs, consistency options, and context strategy metadata with illustrative pricing objects.
+lst-9.37	Redis lock with ownership tokens	Acquires expiring Redis locks and uses token checks to release or extend only the caller's lock.
+lst-9.38	Merkle corpus and shard versions	Hashes documents into domain shards and compares versions to identify changed shards for cache invalidation.
+lst-9.39	Sliding query frequency metrics	Records query timestamps in a bounded queue and extrapolates hourly query frequency from a sliding time window.
+lst-9.40	Cost based context strategy selection	Selects retrieval, full context, or hybrid strategies using corpus size, query frequency, cache reuse, consistency, and budget estimates.
+lst-9.41	Hybrid retrieval with context caching	Caches retrieved context by tenant, permissions, and shard, using distributed refresh locks and selectable stale or blocking behavior.
+lst-9.42	Provider cache status inspection	Parses cache response headers, flags unexpected misses or partial hits, and invalidates affected local shards.
+lst-9.43	Watermark based semantic memory eviction	Scores messages by similarity, recency, and authority, then evicts toward a low watermark while retaining pinned and system messages.
+lst-9.44	Archived conversation retrieval with temporal context	Archives messages in Chroma and retrieves nearby conversation messages as temporarily pinned envelopes around semantic matches.
+lst-9.45	Conversation summaries with fact verification	Extracts facts, generates summaries, verifies preservation with exact matching and model judgments, and falls back to raw history after retries.
+lst-9.46	Memory source tracing and eviction audit	Records token ranges, memory layers, retrieval metadata, pins, and eviction decisions for assembled inference context.
+lst-10.1	Parent and child retrieval schemas	Defines child chunks, parent documents, and retrieval context models with embeddings, provenance, document references, and token counts.
+lst-10.3	Dense retrieval with parent expansion	Queries tenant-scoped vectors with optional metadata filters, expands matching chunks into parent documents, and uses a placeholder embedding function.
+lst-10.4	Retrieval relevance grader stub	Defines relevance grades and bounded confidence, builds a grading prompt, and returns a fixed example result.
+lst-10.5	Corrective retrieval filtering pipeline	Grades retrieved parent documents, filters by relevance and confidence, and raises an error when none remain.
+lst-10.8	Multi-query transformation sketch	Outlines query decomposition and redundancy pruning, with placeholder candidate parsing and similarity checks.
+lst-10.14	Hybrid retrieval configuration and result schemas	Defines validated retrieval thresholds, timeouts, source rankings, and fused results that record dense and sparse scores.
+lst-10.15	Hybrid retrieval with reciprocal rank fusion	Combines tenant-filtered vector and full-text searches with independent timeouts, score thresholds, and reciprocal rank fusion.
+lst-10.21	Typed graph triple writes	Builds parameterized Cypher merges for typed entities, relationships, and source chunks, using tenant scoping and a deterministic relationship key.
+lst-10.22	Leiden graph community detection	Calls Neo4j Graph Data Science to write community identifiers and returns the community count and modularity.
+lst-11.9	Ontology drift and guarded rule updates	Measures embedding and rule drift, proposes changes from execution traces, checks rejected examples, and gates updates with approval and backoff.
+lst-11.12	Event signals and summary batches	Defines timestamped event signals with deterministic content hashes and batch summaries with centroid embeddings and sample event references.
+lst-11.13	In-memory event vector buffer	Stores event embeddings in a Faiss index, skips duplicate hashes, and filters search results by time.
+lst-11.14	Event batch summarization	Sorts events, requests a summary from an injected language model, and computes a centroid embedding with sample event references.
+lst-11.15	Recent and historical event retrieval	Retrieves recent events and archived batches concurrently, blends semantic similarity with temporal decay, and returns the highest-scoring results.
+lst-12.5	Evaluation identity and comparison receipts	Validates runtime identities, comparison plans, and run receipts before checking comparability and attribution eligibility.
+lst-12.6	Evidence-bound evaluator results	Validates evaluator contracts, evidence bindings, missing data, observations, and cost accounting for typed evaluation results.
+lst-12.7	Typed metric evaluation protocol	Defines metric inputs, bound outputs, typed observations, and results with case, protocol, and evidence digests.
+lst-12.9	Evidence-bound release authorization	Builds release or containment commands from evidence, authority limits, signed requests, lease expiry, and rollback readiness.
+lst-12.10	Evaluation identity regression tests	Tests evaluation receipt digests, immutable identities, provider evidence, controlled comparisons, and attribution eligibility.
+lst-13.1	Effect authorization with single-use capabilities	Checks signed authorization state, grants, request scope, and independent conditions before issuing a capability or denying or escalating an effect.
+lst-13.3	Synthetic effect discovery contracts	Binds synthetic scenarios, runtime identities, lineage, and sealed oracle observations to classify unauthorized mock payment changes.
+lst-13.4	Canary leakage and task utility gate	Rejects malformed evaluation rows, detects canaries in attack tool arguments, and compares task utility with a baseline.
+lst-15.1	Knowledge substrate cost router	Routes knowledge to weights, context, or compute using privacy, volatility, exactness, reasoning, and estimated lifetime costs.
+lst-15.4	Fine-tuning breakeven cost model	Compares retrieval and fine-tuning costs, including shared GPU reservations and adapter transfer latency, and calculates when breakeven occurs.
+lst-15.5	Fine-tuning architecture decision record	Validates strategy records with breakeven requirements, LoRA monitoring, failure analysis, observability, and adapter swap constraints.
+lst-15.6	Retrieval versus fine-tuning decision tree	Selects retrieval, LoRA fine-tuning, or RLHF through privacy, volatility, knowledge-type, and economic gates while recording decisions and warnings.
+lst-15.7	SQL dialect fine-tuning decision example	Builds an example SQL dialect decision record with cost estimates, failure risks, monitoring requirements, and deployment constraints.
+lst-16.2	Shared-support KL divergence monitor	Computes shared-support KL divergence between model logits with severity classification, inference retries, and a circuit breaker.
+lst-16.3	Synthetic training data rejection sampling	Generates teacher responses, scores candidates with a judge, filters by quality thresholds, and assembles a hashed distillation dataset.
+lst-16.7	Adapter composition compiler pseudocode	Outlines declaration normalization, dependency graph checks, compatibility validation, and rejection of unsupported operators or recovery cycles.
+lst-16.8	Adapter admission and activation receipts	Validates adapter authority, evidence, and retained artifacts before activation, recording receipts and fencing failed generations.
+lst-16.9	Model adapter release pipeline	Models training provenance, evaluation gates, and deployment state, with endpoint metric polling and rollback decisions.
+lst-16.10	Staged rollout traffic policy	Configures shadow, canary, and later rollout phases with traffic percentages, minimum durations, sample counts, and metric thresholds.
+lst-16.11	Model card from pipeline artifacts	Builds a model card from training, evaluation, and deployment artifacts, including provenance, benchmark results, intended use, and readiness checks.
+lst-17.9	Typed MCP metrics tool	Exposes a local fixture metrics tool with bounded UTC requests, source-specific metric semantics, and request-bound output validation.
+lst-18.2	Metrics agent capability card	Configures an agent card with an HTTP JSON interface, bearer authentication, JSON input and output, and a synthetic metrics summary skill.

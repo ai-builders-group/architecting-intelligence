@@ -1,3 +1,2 @@
 recursive-include tests/fixtures *.py *.tsv *.txt
 include tests/conftest.py
-include .github/workflows/ci.yml

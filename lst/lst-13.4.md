@@ -1,7 +1,9 @@
-# lst-13.4
+# Canary leakage and task utility gate (lst-13.4)
 
-Chapter 13
+Rejects malformed evaluation rows, detects canaries in attack tool arguments, and compares task utility with a baseline.
 
-Runs on its own
-
-[chapters/ch13/lst-13.4.py](../chapters/ch13/lst-13.4.py)
+- **Chapter:** 13
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+
+- **Run:** `python chapters/ch13/lst-13.4.py`
+- **File:** [chapters/ch13/lst-13.4.py](../chapters/ch13/lst-13.4.py)

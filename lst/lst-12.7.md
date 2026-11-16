@@ -1,7 +1,8 @@
-# lst-12.7
+# Typed metric evaluation protocol (lst-12.7)
 
-Chapter 12
+Defines metric inputs, bound outputs, typed observations, and results with case, protocol, and evidence digests.
 
-Runs on its own
-
-[chapters/ch12/lst-12.7.txt](../chapters/ch12/lst-12.7.txt)
+- **Chapter:** 12
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+
+- **File:** [chapters/ch12/lst-12.7.txt](../chapters/ch12/lst-12.7.txt)

@@ -1,7 +1,8 @@
-# lst-9.41
+# Hybrid retrieval with context caching (lst-9.41)
 
-Chapter 09
+Caches retrieved context by tenant, permissions, and shard, using distributed refresh locks and selectable stale or blocking behavior.
 
-Needs earlier listing lst-9.36
-
-[chapters/ch09/lst-9.41.py](../chapters/ch09/lst-9.41.py)
+- **Chapter:** 09
+- **Class:** Needs earlier listing lst-9.36
+- **Needs:** Python 3.12+; the definitions from [lst-9.36](lst-9.36.md)
+- **File:** [chapters/ch09/lst-9.41.py](../chapters/ch09/lst-9.41.py)

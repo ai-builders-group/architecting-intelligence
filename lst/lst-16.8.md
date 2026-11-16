@@ -1,7 +1,8 @@
-# lst-16.8
+# Adapter admission and activation receipts (lst-16.8)
 
-Chapter 16
+Validates adapter authority, evidence, and retained artifacts before activation, recording receipts and fencing failed generations.
 
-Runs on its own
-
-[chapters/ch16/lst-16.8.txt](../chapters/ch16/lst-16.8.txt)
+- **Chapter:** 16
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+
+- **File:** [chapters/ch16/lst-16.8.txt](../chapters/ch16/lst-16.8.txt)

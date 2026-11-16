@@ -1,7 +1,9 @@
-# lst-9.33
+# Offline relevance calibration parameters (lst-9.33)
 
-Chapter 09
+Trains logistic or isotonic mappings offline and applies exported parameters at runtime without retraining.
 
-Runs on its own
-
-[chapters/ch09/lst-9.33.py](../chapters/ch09/lst-9.33.py)
+- **Chapter:** 09
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `numpy`, `pydantic`, `scikit-learn` (`pip install -r requirements/core.txt`)
+- **Run:** `python chapters/ch09/lst-9.33.py`
+- **File:** [chapters/ch09/lst-9.33.py](../chapters/ch09/lst-9.33.py)

@@ -1,7 +1,8 @@
-# lst-10.8
+# Multi-query transformation sketch (lst-10.8)
 
-Chapter 10
+Outlines query decomposition and redundancy pruning, with placeholder candidate parsing and similarity checks.
 
-Sketch
-
-[chapters/ch10/lst-10.8.py](../chapters/ch10/lst-10.8.py)
+- **Chapter:** 10
+- **Class:** Sketch
+- **Needs:** Python 3.12+
+- **File:** [chapters/ch10/lst-10.8.py](../chapters/ch10/lst-10.8.py)

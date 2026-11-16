@@ -1,7 +1,8 @@
-# lst-9.12
+# Blue green index migration sketch (lst-9.12)
 
-Chapter 09
+Outlines reindexing with a locked parser version, comparing retrieval precision, switching traffic, and retiring the previous index.
 
-Sketch
-
-[chapters/ch09/lst-9.12.py](../chapters/ch09/lst-9.12.py)
+- **Chapter:** 09
+- **Class:** Sketch
+- **Needs:** Python 3.12+
+- **File:** [chapters/ch09/lst-9.12.py](../chapters/ch09/lst-9.12.py)

@@ -1,7 +1,9 @@
-# lst-15.5
+# Fine-tuning architecture decision record (lst-15.5)
 
-Chapter 15
+Validates strategy records with breakeven requirements, LoRA monitoring, failure analysis, observability, and adapter swap constraints.
 
-Runs on its own
-
-[chapters/ch15/lst-15.5.py](../chapters/ch15/lst-15.5.py)
+- **Chapter:** 15
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `pydantic` (`pip install -r requirements/quickstart.txt`)
+- **Run:** `python chapters/ch15/lst-15.5.py`
+- **File:** [chapters/ch15/lst-15.5.py](../chapters/ch15/lst-15.5.py)

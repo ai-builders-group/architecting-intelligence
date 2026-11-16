@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       COMPANION_ROOT: '.'
+      PYTHONPATH: tools
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -20,13 +21,16 @@ jobs:
       - name: L0
         run: >-
           python -m companion_tooling l0
-          --inventory "$COMPANION_ROOT/inventory.tsv"
+          --inventory "$COMPANION_ROOT/tools/inventory.tsv"
+          --repo "$COMPANION_ROOT"
       - name: check_pointers
         run: >-
           python -m companion_tooling check_pointers
-          --inventory "$COMPANION_ROOT/inventory.tsv"
-          --pointers "$COMPANION_ROOT/pointers.txt"
+          --inventory "$COMPANION_ROOT/tools/inventory.tsv"
+          --pointers "$COMPANION_ROOT/tools/pointers.txt"
+          --repo "$COMPANION_ROOT"
       - name: Tooling lint and types
+        working-directory: tools
         run: |
           ruff check companion_tooling
           mypy companion_tooling

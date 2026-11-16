@@ -1,7 +1,8 @@
-# lst-13.3
+# Synthetic effect discovery contracts (lst-13.3)
 
-Chapter 13
+Binds synthetic scenarios, runtime identities, lineage, and sealed oracle observations to classify unauthorized mock payment changes.
 
-Runs on its own
-
-[chapters/ch13/lst-13.3.txt](../chapters/ch13/lst-13.3.txt)
+- **Chapter:** 13
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+
+- **File:** [chapters/ch13/lst-13.3.txt](../chapters/ch13/lst-13.3.txt)

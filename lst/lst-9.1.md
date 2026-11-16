@@ -1,7 +1,9 @@
-# lst-9.1
+# Visual page complexity routing (lst-9.1)
 
-Chapter 09
+Combines a vision classifier with text density and column heuristics to route pages among OCR and vision extraction pipelines.
 
-Runs on its own
-
-[chapters/ch09/lst-9.1.py](../chapters/ch09/lst-9.1.py)
+- **Chapter:** 09
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+; `numpy`, `pillow`, `pydantic`, `torch`, `torchvision` (`pip install -r requirements/ml.txt`)
+- **Run:** `python chapters/ch09/lst-9.1.py`
+- **File:** [chapters/ch09/lst-9.1.py](../chapters/ch09/lst-9.1.py)

@@ -1,0 +1,6 @@
+-r core.txt
+langgraph>=0.2
+langchain>=0.2
+openai>=1.40
+anthropic>=0.34
+fastapi>=0.112

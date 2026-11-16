@@ -1,7 +1,8 @@
-# lst-12.6
+# Evidence-bound evaluator results (lst-12.6)
 
-Chapter 12
+Validates evaluator contracts, evidence bindings, missing data, observations, and cost accounting for typed evaluation results.
 
-Runs on its own
-
-[chapters/ch12/lst-12.6.txt](../chapters/ch12/lst-12.6.txt)
+- **Chapter:** 12
+- **Class:** Runs on its own
+- **Needs:** Python 3.12+
+- **File:** [chapters/ch12/lst-12.6.txt](../chapters/ch12/lst-12.6.txt)
