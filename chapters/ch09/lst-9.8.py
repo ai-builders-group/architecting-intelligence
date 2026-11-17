@@ -38,7 +38,7 @@ class ContextualPrependSplitter:
         summary = self._generate_summary(text)
         
         # Step 2: Chunk the text (using deterministic splitter)
-        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size * 4,  # Rough token-to-char
             chunk_overlap=100

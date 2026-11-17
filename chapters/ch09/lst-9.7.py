@@ -4,7 +4,7 @@ from typing import List
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from pydantic import BaseModel, Field
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 class SemanticChunk(BaseModel):
     text: str

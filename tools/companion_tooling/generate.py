@@ -30,6 +30,7 @@ def load_tsv(path: Path, header: list[str], blank_ok: bool = False) -> dict[str,
 PIP_NAMES = {
     "PIL": "pillow",
     "faiss": "faiss-cpu",
+    "langchain_text_splitters": "langchain-text-splitters",
     "sentence_transformers": "sentence-transformers",
     "sklearn": "scikit-learn",
 }

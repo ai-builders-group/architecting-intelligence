@@ -1,2 +1,1 @@
 id	note
-lst-9.7	Uses langchain.text_splitter, which LangChain 1.x removed; a fix is planned.
