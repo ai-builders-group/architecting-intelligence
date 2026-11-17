@@ -8,6 +8,27 @@ Before release, the files were also checked for syntax, and every excerpt shown 
 
 These checks confirm that the files are present and well formed. They do not exercise the code against live services. CI runs L0 without excerpt inputs; the pre-release excerpt check is separate.
 
+## Executing standalone listings
+
+The `run-listings` CI job uses Python 3.12, installs `requirements/all.txt` (with
+CPU-only PyTorch), and executes every row with `class` equal to `runs` in
+`tools/inventory.tsv`, including Python code stored in `.txt` files. Listings execute as separate Python processes from the repository root, with a
+60-second timeout and no live services required.
+
+Run `python tools/run_listings.py` locally after installing the same dependencies.
+Use `--only lst-1.3 lst-1.8`, `--timeout 30`, or `--report build/custom.json` to
+select IDs, change the per-listing timeout, or choose the report path. Relative
+report paths resolve from the repository root. The default JSON report is
+`build/run_listings.json`; it records pass/fail, exit codes, timeouts, the last
+20 stderr lines, and known-issue verdicts. A summary table is also printed.
+
+`tools/known_issues.tsv` has tab-separated `id` and `note` columns. A failing
+listing in that file is reported but does not fail the job; an unlisted failure
+or a listed listing that now passes fails the job. Remove stale entries after
+confirming the fix. Only executed `runs` rows are checked for stale entries,
+including when `--only` selects a subset. Do not exempt new failures without
+investigating them.
+
 ## Files and generated pages
 
 `tools/companion_tooling/` holds the offline tooling, and `tools/tests/` holds its tests and fixtures. `tools/inventory.tsv` records listing paths and classes. `tools/pointers.txt` records the book's pointers. `tools/listings_meta.tsv` supplies the titles and descriptions for listing pages and the index.

@@ -1,5 +1,5 @@
 # --8<-- [start:lst-16.11]
-# src/ch10_weight_context_continuum/model_card.py
+# model_card.py
 
 from __future__ import annotations
 

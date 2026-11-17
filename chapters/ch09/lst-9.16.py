@@ -3,6 +3,7 @@
 from pydantic import BaseModel, Field
 from datetime import datetime, UTC
 from typing import Optional, Literal
+from enum import Enum
 
 class MetadataSchemaVersion(BaseModel):
     """
@@ -24,7 +25,7 @@ class DepartmentV2(str):
     """
     pass
 
-class SourceType(str):
+class SourceType(str, Enum):
     """Fixed taxonomy - stable across schema versions."""
     PDF = "pdf"
     MARKDOWN = "markdown"
@@ -54,7 +55,7 @@ class FilterableMetadata(BaseModel):
     source_uri: str
     section_path: list[str] = Field(
         default_factory=list,
-        description="Hierarchical path: ['Chapter 3', 'Section 3.2']"
+        description="Hierarchical path: ['Chapter 3', 'Quantization and Memory']"
     )
     page_number: Optional[int] = None
     

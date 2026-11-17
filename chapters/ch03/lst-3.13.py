@@ -1,5 +1,5 @@
 # --8<-- [start:lst-3.13]
-# src/ch10_weight_context_continuum/reasoning_budget.py
+# reasoning_budget.py
 """
 Reasoning Budget Pattern: Configurable inference-time compute allocation.
 
@@ -120,8 +120,7 @@ class ReasoningBudget(BaseModel):
         ge=1.0,
         le=2.0,
         description="Multiplier applied to best_of_n to launch hedge requests. "
-                    "Mitigates P99 tail latency from slow API replicas. "
-                    "See 'Tail-Latency Amplification' in Section 10.1.",
+                    "Mitigates P99 tail latency from slow API replicas.",
     )
     stream_thoughts: bool = Field(
         default=False,

@@ -1,10 +1,10 @@
 # --8<-- [start:lst-3.15]
-# src/ch10_weight_context_continuum/routing_example.py
+# routing_example.py
 """
 Worked example: routing a mathematical proof query through L1, L2, and L3.
 
 Demonstrates the quality/cost/latency trade-off empirically.
-In production, the gating classifier in Section 10.3 routes this
+In production, the gating classifier in Chapter 4 routes this
 automatically based on a complexity score.
 """
 
@@ -99,9 +99,9 @@ async def run_all_levels(client: LLMClient) -> None:
         print(f"  Trace:         {result.trace.summary()}")
         print()
 
-    # Print comparative summary as Table 10.2
+    # Print comparative summary
     print(f"\n{'='*70}")
-    print("Table 10.2: Comparative Results — Three Reasoning Levels")
+    print("Comparative Results — Three Reasoning Levels")
     print(f"{'Level':<30} {'Confidence':>12} {'Time (s)':>10} {'Pruned Nodes':>14}")
     print("-" * 70)
     for label, result in results:

@@ -7,3 +7,4 @@ __pycache__/
 # Local evidence is never a public repository input.
 TOOLING_PROOF.md
 .test-work/
+build/

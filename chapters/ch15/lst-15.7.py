@@ -121,9 +121,9 @@ def build_sql_dialect_adr() -> FineTuningADR:
         ),
         cross_references=[
             "ADR-10.0-substrate-router",
-            "Section 10.3: Catastrophic Forgetting",
-            "Section 12.x: LoRA Full Treatment",
-            "Section 7.0: Attention SNR (Lost in the Middle)",
+            "Chapter 16: Catastrophic Forgetting",
+            "Chapter 16: LoRA Full Treatment",
+            "Chapter 5: Attention SNR (Lost in the Middle)",
             "[1] Berglund et al. (2023) — Reversal Curse",
             "[2] Hu et al. (2021) — LoRA",
         ],

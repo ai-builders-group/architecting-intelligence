@@ -1,5 +1,5 @@
 # --8<-- [start:lst-16.3]
-# src/ch10_weight_context_continuum/synthetic_data_factory.py
+# synthetic_data_factory.py
 from __future__ import annotations
 
 import asyncio
@@ -253,9 +253,9 @@ class RejectionSamplingPipeline(BaseModel):
     Named pattern: Synthetic Data Pipeline.
     Orchestrates: Teacher generates → Judge filters → Top K% enters training set.
 
-    DISTINCTION from Section 10.1 (Inference-Time RS):
-    - 10.1: Per-query, real-time, returns best response to user, no weight update.
-    - 10.6: Per-dataset, offline, writes to training corpus, triggers student fine-tuning.
+    DISTINCTION from inference-time rejection sampling (RS):
+    - Inference-time RS: Per-query, real-time, returns best response to user, no weight update.
+    - This pipeline: Per-dataset, offline, writes to training corpus, triggers student fine-tuning.
     """
     pipeline_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     config: RejectionSamplingConfig

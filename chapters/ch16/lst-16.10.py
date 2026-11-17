@@ -1,5 +1,5 @@
 # --8<-- [start:lst-16.10]
-# src/ch10_weight_context_continuum/default_policies.py
+# default_policies.py
 
 from dataclasses import dataclass
 from enum import Enum

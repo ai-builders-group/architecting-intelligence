@@ -1,5 +1,5 @@
 # --8<-- [start:lst-3.14]
-# src/ch10_weight_context_continuum/reasoning_engine.py
+# reasoning_engine.py
 """
 Reasoning Engine: Executes CoT, ToT, and Best-of-N strategies.
 
@@ -400,8 +400,8 @@ class ReasoningEngine:
         to mitigate P99 tail-latency. As soon as best_of_n candidates have
         returned verified scores, surplus (hedge) tasks are cancelled.
 
-        This is inference-time rejection sampling. Contrast with Section 10.6
-        (training-time rejection sampling), where the same statistical
+        This is inference-time rejection sampling. Contrast with training-time
+        rejection sampling, where the same statistical
         primitive operates on a dataset over hours rather than seconds.
         """
         target_n = self._budget.best_of_n

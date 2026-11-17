@@ -1,5 +1,5 @@
 # --8<-- [start:lst-16.2]
-# src/ch10_weight_context_continuum/kl_divergence_monitor.py
+# kl_divergence_monitor.py
 from __future__ import annotations
 
 import asyncio

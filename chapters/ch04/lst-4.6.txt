@@ -32,7 +32,7 @@ class FallbackExecutor:
     ):
         """
         Args:
-            router: The distilled complexity classifier (from Section 3.4).
+            router: The distilled complexity classifier.
             endpoints: (provider, model) that serves each tier; breakers key on it.
             confidence_threshold: The γ threshold for confidence gating.
             telemetry: Optional telemetry emitter for observability.

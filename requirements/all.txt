@@ -3,3 +3,4 @@
 -r temporal.txt
 -r postgres.txt
 -r services.txt
+-r mcp.txt

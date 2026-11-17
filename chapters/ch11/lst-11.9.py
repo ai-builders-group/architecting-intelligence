@@ -1,7 +1,7 @@
 # --8<-- [start:lst-11.9]
-# src/ch10_weight_context_continuum/self_healing_ontology.py
+# self_healing_ontology.py
 """
-Self-Healing Ontology Pattern (Section 10.7)
+Self-Healing Ontology Pattern
 
 Architecture:
   - OntologyDriftDetector: MMD-based drift detection on zero-cost embeddings.

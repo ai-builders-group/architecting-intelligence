@@ -1,5 +1,5 @@
 # --8<-- [start:lst-15.1]
-# src/ch10_weight_context_continuum/substrate_router.py
+# substrate_router.py
 from enum import Enum
 from typing import Protocol
 from pydantic import BaseModel, Field, computed_field
@@ -88,7 +88,7 @@ COMPUTE_WRITE_COST = 0.0    # No training required
 
 # Per-query costs (USD)
 WEIGHTS_READ_COST = 0.00001   # Marginal compute per query
-WEIGHTS_HOSTING_USD_PER_DAY = 72.0  # One reserved H100 at $3/hour (Section 15.2); this is most of the cost
+WEIGHTS_HOSTING_USD_PER_DAY = 72.0  # One reserved H100 at $3/hour; this is most of the cost
 CONTEXT_READ_COST_PER_1K = 0.0025  # $2.50/1M tokens (OpenAI input pricing)
 COMPUTE_READ_COST_PER_1K = 0.015   # $15/1M tokens (o1 input pricing)
 

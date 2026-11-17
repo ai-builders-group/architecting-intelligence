@@ -1,5 +1,5 @@
 # --8<-- [start:lst-16.9]
-# src/ch10_weight_context_continuum/weight_release_pipeline.py
+# weight_release_pipeline.py
 
 from __future__ import annotations
 
