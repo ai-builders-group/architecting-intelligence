@@ -2,7 +2,7 @@
 
 Companion code for production AI agents and workflows, covering validation, orchestration, retrieval, and evaluation.
 
-[The book and updates](https://arizenai.com/architecting-intelligence/?ref=gh-b2#book-signup)
+Book updates and early access: https://arizenai.com/architecting-intelligence/?ref=gh-b2-readme#book-signup
 
 [![Companion checks](https://github.com/ai-builders-group/architecting-intelligence/actions/workflows/ci.yml/badge.svg)](https://github.com/ai-builders-group/architecting-intelligence/actions/workflows/ci.yml)
 
